@@ -16,6 +16,9 @@ env:
 jobs:
   test:
     runs-on: windows-latest
+    # To update the tests badge (on the `badges` branch).
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -24,7 +27,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Warnings are shown but don't fail the build; clippy errors do.
       - run: cargo clippy --all-targets
-      - run: cargo test
+      - name: Tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee "$RUNNER_TEMP/test-output.txt"
+
+      # The README's "tests: 153 passed" badge reads tests.json from the `badges` branch. That branch
+      # holds one commit, replaced on every push to main, so it never grows.
+      - name: Update the tests badge
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r passed failed < <(sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/test-output.txt" 2>/dev/null \
+            | awk '/^test result:/ { for (i = 1; i < NF; i++) { if ($(i+1) ~ /^passed/) p += $i; if ($(i+1) ~ /^failed/) f += $i } } END { print p+0, f+0 }')
+          if [ "$failed" -gt 0 ]; then message="$failed failed, $passed passed"; color=red
+          elif [ "$passed" -gt 0 ]; then message="$passed passed"; color=brightgreen
+          else message="didn't run"; color=lightgrey; fi
+          mkdir "$RUNNER_TEMP/badge" && cd "$RUNNER_TEMP/badge"
+          printf '{"schemaVersion":1,"label":"tests","message":"%s","color":"%s"}\n' "$message" "$color" > tests.json
+          git init -q -b badges
+          git add tests.json
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Test count for the README badge"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" badges
 
   release:
     needs: test

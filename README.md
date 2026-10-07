@@ -8,8 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/thefoultarnished/zima/actions/workflows/ci.yml"><img src="https://github.com/thefoultarnished/zima/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
-  <a href="https://github.com/thefoultarnished/zima/releases"><img src="https://img.shields.io/github/v/release/thefoultarnished/zima?include_prereleases&label=release" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6" alt="Platform: Windows 10 and 11">
+  <a href="https://github.com/thefoultarnished/zima/actions/workflows/ci.yml"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fthefoultarnished%2Fzima%2Fbadges%2Ftests.json" alt="Tests passed"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-2024%20edition-B7410E?logo=rust" alt="Rust 2024 edition"></a>
   <a href="https://slint.dev"><img src="https://img.shields.io/badge/UI-Slint%201.18-2379F4" alt="UI: Slint 1.18"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6C757D" alt="License: MIT"></a>
