@@ -1,0 +1,208 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconButton, Icons } from "widgets.slint";
+
+export struct ShortcutRow {
+    id: string,
+    title: string,
+    // "Ctrl+Shift+K", or empty.
+    combo: string,
+    // Changed from the default.
+    custom: bool,
+}
+
+// Keyboard shortcuts editor: click a shortcut, press the new keys.
+export component ShortcutsPopover {
+    in property <[ShortcutRow]> rows;
+    in property <length> limit-height: 600px;
+    callback set-shortcut(string, string);
+    callback reset-shortcut(string);
+    callback close();
+    callback filter-edited(string);
+
+    // The command waiting for a new key combination ("" = none).
+    property <string> recording;
+
+    width: 520px;
+    height: min(content.preferred-height + 100px, root.limit-height);
+
+    // Turn a key event into "Ctrl+Alt+Shift+X".
+    function combo(event: KeyEvent) -> string {
+        return (event.modifiers.control ? "Ctrl+" : "") + (event.modifiers.alt ? "Alt+" : "") + (event.modifiers.shift ? "Shift+" : "")
+            + (event.text == Key.F1 ? "F1" : event.text == Key.F2 ? "F2" : event.text == Key.F3 ? "F3" : event.text == Key.F4 ? "F4"
+            : event.text == Key.F5 ? "F5" : event.text == Key.F6 ? "F6" : event.text == Key.F7 ? "F7" : event.text == Key.F8 ? "F8"
+            : event.text == Key.F9 ? "F9" : event.text == Key.F10 ? "F10" : event.text == Key.F11 ? "F11" : event.text == Key.F12 ? "F12"
+            : event.text.to-uppercase());
+    }
+
+    TouchArea { }
+
+    Rectangle {
+        border-radius: 14px;
+        background: Theme.popover;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-blur: 32px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: #00000050;
+    }
+
+    // Catches the next key combination while recording.
+    recorder := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (root.recording == "") {
+                return reject;
+            }
+            if (event.text == Key.Escape) {
+                root.recording = "";
+                return accept;
+            }
+            // Wait for a real key, not just a modifier on its own.
+            if (event.text == Key.Control || event.text == Key.Shift || event.text == Key.Alt || event.text == Key.Meta) {
+                return accept;
+            }
+            if (event.modifiers.control || event.modifiers.alt || event.text == Key.F1 || event.text == Key.F2 || event.text == Key.F3
+                || event.text == Key.F4 || event.text == Key.F5 || event.text == Key.F6 || event.text == Key.F7 || event.text == Key.F8
+                || event.text == Key.F9 || event.text == Key.F10 || event.text == Key.F11 || event.text == Key.F12) {
+                root.set-shortcut(root.recording, root.combo(event));
+                root.recording = "";
+            }
+            return accept;
+        }
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            height: 52px;
+            padding-left: 18px;
+            padding-right: 10px;
+            Text {
+                horizontal-stretch: 1;
+                text: "Keyboard shortcuts";
+                color: Theme.ink;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    description: "Close";
+                    icon: Icons.close;
+                    clicked => { root.close(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-bottom: 8px;
+            Rectangle {
+                height: 30px;
+                border-radius: 8px;
+                background: Theme.hover;
+                search := TextInput {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    single-line: true;
+                    vertical-alignment: center;
+                    font-size: 13px;
+                    color: Theme.ink;
+                    edited => { root.filter-edited(self.text); }
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        visible: search.text.is-empty;
+                        text: "Filter commands";
+                        color: Theme.muted;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        scroll := ScrollView {
+            content := VerticalLayout {
+                width: scroll.visible-width;
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 12px;
+                spacing: 1px;
+
+                for row in root.rows: Rectangle {
+                    height: 36px;
+                    border-radius: 8px;
+                    background: row-touch.has-hover ? Theme.hover : transparent;
+
+                    row-touch := TouchArea { }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 4px;
+                        spacing: 8px;
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: row.title;
+                            overflow: elide;
+                            color: Theme.ink;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        // The shortcut; click to record a new one.
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: max(70px, chip-text.preferred-width + 16px);
+                                height: 24px;
+                                border-radius: 6px;
+                                background: root.recording == row.id ? Theme.accent.with-alpha(0.2) : chip-touch.has-hover ? Theme.selected : Theme.hover;
+                                border-width: root.recording == row.id ? 1px : 0;
+                                border-color: Theme.accent;
+                                chip-text := Text {
+                                    text: root.recording == row.id ? "Press keys…" : row.combo != "" ? row.combo : "Add";
+                                    color: row.combo == "" && root.recording != row.id ? Theme.muted : Theme.ink-soft;
+                                    font-family: "JetBrains Mono";
+                                    font-size: 11.5px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                chip-touch := TouchArea {
+                                    clicked => {
+                                        root.recording = row.id;
+                                        recorder.focus();
+                                    }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            IconButton {
+                                size: 24px;
+                                icon-size: 11px;
+                                description: "Reset to default";
+                                icon: Icons.restore;
+                                opacity: row.custom ? 1 : 0;
+                                clicked => { root.reset-shortcut(row.id); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Text {
+            height: 30px;
+            text: "Shortcuts need Ctrl or Alt (or an F key). Esc cancels recording.";
+            color: Theme.muted;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

@@ -1,0 +1,29 @@
+[package]
+name = "zima"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arboard = "3.6.1"
+chrono = "0.4.45"
+cpal = "0.18"
+directories = "6.0.0"
+global-hotkey = "0.8.0"
+htmd = "0.5.5"
+notify-rust = "4.18.1"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+slint = { version = "1.18", features = ["unstable-winit-030"] }
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
+ureq = "3.4.2"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+[target."cfg(windows)".dependencies]
+window-vibrancy = "0.8.1"
+windows = { version = "0.62.2", features = ["Win32_Globalization", "Win32_System_Com"] }
+winreg = "0.56.0"

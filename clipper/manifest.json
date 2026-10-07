@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Send to Zima",
+  "version": "1.0.0",
+  "description": "Send the current page or selected text to the Zima desktop app.",
+  "permissions": ["activeTab", "contextMenus", "scripting", "storage"],
+  "host_permissions": ["http://127.0.0.1:47621/*"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Send to Zima",
+    "default_popup": "popup.html"
+  }
+}

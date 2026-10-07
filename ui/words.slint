@@ -1,0 +1,196 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconButton, Icons } from "widgets.slint";
+
+export struct SpellRow {
+    word: string,
+    count: int,
+    suggestions: [string],
+}
+
+export struct LookupRow {
+    // Part of speech: "noun", "verb", …
+    part: string,
+    definitions: [string],
+    // Comma-separated.
+    synonyms: string,
+}
+
+component Chip {
+    in property <string> label;
+    in property <bool> strong;
+    callback clicked();
+
+    width: text.preferred-width + 16px;
+    height: 24px;
+
+    Rectangle {
+        border-radius: 6px;
+        background: touch.pressed ? Theme.selected : touch.has-hover ? Theme.selected.with-alpha(0.8) : (root.strong ? Theme.accent.with-alpha(0.15) : Theme.hover);
+    }
+
+    text := Text {
+        text: root.label;
+        color: root.strong ? Theme.accent : Theme.ink-soft;
+        font-size: 12px;
+        font-weight: root.strong ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// Spelling (F7) and word lookup, docked top-right.
+export component WordsPanel {
+    // "spell" or "lookup".
+    in property <string> mode;
+    in property <[SpellRow]> spell-rows;
+    in property <string> lookup-word;
+    in property <string> lookup-status;
+    in property <[LookupRow]> lookup-rows;
+    in property <length> limit-height: 600px;
+    callback replace(string, string);
+    callback ignore(string);
+    callback add-word(string);
+    callback close();
+
+    width: 340px;
+    height: min(content.preferred-height + 52px, root.limit-height);
+
+    TouchArea { }
+
+    Rectangle {
+        border-radius: 12px;
+        background: Theme.popover;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: #00000040;
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            height: 44px;
+            padding-left: 16px;
+            padding-right: 8px;
+            Text {
+                horizontal-stretch: 1;
+                text: root.mode == "spell" ? (root.spell-rows.length == 0 ? "Spelling" : "Spelling  \u{00b7}  " + root.spell-rows.length) : root.lookup-word;
+                color: Theme.ink;
+                font-size: root.mode == "spell" ? 14px : 17px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    description: "Close";
+                    icon: Icons.close;
+                    clicked => { root.close(); }
+                }
+            }
+        }
+
+        scroll := ScrollView {
+            content := VerticalLayout {
+                width: scroll.visible-width;
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-bottom: 14px;
+                spacing: 12px;
+
+                // ----- Spelling -----
+                if root.mode == "spell" && root.spell-rows.length == 0: Text {
+                    text: "No spelling mistakes found.";
+                    color: Theme.muted;
+                    font-size: 13px;
+                }
+
+                if root.mode == "spell": VerticalLayout {
+                    spacing: 12px;
+                    for row in root.spell-rows: VerticalLayout {
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: row.word;
+                                color: Theme.danger;
+                                font-size: 14px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            if row.count > 1: Text {
+                                text: "\u{00d7}" + row.count;
+                                color: Theme.muted;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: start;
+                            for suggestion in row.suggestions: Chip {
+                                label: suggestion;
+                                strong: true;
+                                clicked => { root.replace(row.word, suggestion); }
+                            }
+                            Chip {
+                                label: "Ignore";
+                                clicked => { root.ignore(row.word); }
+                            }
+                            Chip {
+                                label: "Add";
+                                clicked => { root.add-word(row.word); }
+                            }
+                        }
+                    }
+                }
+
+                // ----- Lookup -----
+                if root.mode == "lookup" && root.lookup-status != "": Text {
+                    text: root.lookup-status;
+                    color: Theme.muted;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                if root.mode == "lookup": VerticalLayout {
+                    spacing: 14px;
+                    for meaning in root.lookup-rows: VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: meaning.part;
+                            color: Theme.accent;
+                            font-size: 12px;
+                            font-weight: 600;
+                            font-italic: true;
+                        }
+                        for definition[i] in meaning.definitions: Text {
+                            text: (i + 1) + ". " + definition;
+                            color: Theme.ink;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        if meaning.synonyms != "": Text {
+                            text: "Similar: " + meaning.synonyms;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                if root.mode == "lookup": Text {
+                    text: "Definitions from dictionaryapi.dev";
+                    color: Theme.muted.with-alpha(0.7);
+                    font-size: 10.5px;
+                }
+            }
+        }
+    }
+}

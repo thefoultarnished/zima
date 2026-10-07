@@ -1,0 +1,1194 @@
+// Bundled fonts (OFL; licences in fonts/).
+import "../fonts/Inter-Regular.ttf";
+import "../fonts/Inter-Bold.ttf";
+import "../fonts/Inter-Italic.ttf";
+import "../fonts/Newsreader-Regular.ttf";
+import "../fonts/Newsreader-Bold.ttf";
+import "../fonts/Newsreader-Italic.ttf";
+import "../fonts/Literata-Regular.ttf";
+import "../fonts/Literata-Bold.ttf";
+import "../fonts/Literata-Italic.ttf";
+import "../fonts/JetBrainsMono-Regular.ttf";
+import "../fonts/JetBrainsMono-Bold.ttf";
+import "../fonts/JetBrainsMono-Italic.ttf";
+
+import { Theme } from "theme.slint";
+import { FormatButton, Icon, IconButton, Icons, ResizeEdge, TrafficLight } from "widgets.slint";
+import { NoteRow, Sidebar, TagRow } from "sidebar.slint";
+import { Editor, LinkRow, Suggestion } from "editor.slint";
+import { MdBlock } from "markdown.slint";
+import { ReminderPopover, ReminderRow, Toast } from "reminders.slint";
+import { SettingsPopover } from "settings.slint";
+import { Presentation } from "present.slint";
+import { ShortcutsPopover, ShortcutRow } from "shortcuts.slint";
+import { PaletteItem, QuickSwitcher } from "palette.slint";
+import { CalendarDay, CalendarPopover } from "calendar.slint";
+import { StatCell, StatSummary, StatsPopover } from "stats.slint";
+import { StickyWindow } from "sticky.slint";
+import { CaptureWindow } from "capture.slint";
+import { LookupRow, SpellRow, WordsPanel } from "words.slint";
+import { TaskRow, TasksPopover } from "tasks.slint";
+
+export { NoteRow, ReminderRow, MdBlock, Suggestion, Theme, TagRow, LinkRow, PaletteItem, CalendarDay, StatCell, StatSummary, StickyWindow, CaptureWindow, SpellRow, LookupRow, TaskRow, ShortcutRow }
+
+// The tray icon keeps Zima (and its reminders) running when the window is closed.
+export component TrayIcon inherits SystemTrayIcon {
+    icon: @image-url("icon.svg");
+    tooltip: "Zima";
+
+    callback open();
+    callback new-note();
+    callback quit();
+
+    clicked => { root.open(); }
+
+    Menu {
+        MenuItem {
+            title: "Open Zima";
+            activated => { root.open(); }
+        }
+        MenuItem {
+            title: "New note";
+            activated => { root.new-note(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: "Quit";
+            activated => { root.quit(); }
+        }
+    }
+}
+
+// Edit / Split / Preview switch.
+component ModeButton {
+    in property <string> icon;
+    in property <bool> selected;
+    // What screen readers announce.
+    in property <string> description;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.description;
+    accessible-action-default => { root.clicked(); }
+
+    width: 28px;
+    height: 22px;
+
+    Rectangle {
+        border-radius: 5px;
+        background: root.selected ? Theme.popover : touch.has-hover ? Theme.hover : transparent;
+        drop-shadow-blur: root.selected ? 3px : 0;
+        drop-shadow-color: #00000025;
+        animate background { duration: 120ms; }
+    }
+
+    Icon {
+        width: 13px;
+        height: 13px;
+        commands: root.icon;
+        stroke: root.selected ? Theme.ink : Theme.muted;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Zima";
+    icon: @image-url("icon.svg");
+    no-frame: true;
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    min-width: 600px;
+    min-height: 380px;
+    // The backdrop below supplies the color, so transparency settings can show Mica through.
+    background: transparent;
+    default-font-family: "Inter";
+
+    // Notes
+    in property <[NoteRow]> active-notes;
+    in property <[NoteRow]> favorite-notes;
+    in property <[NoteRow]> recent-notes;
+    in property <[NoteRow]> all-notes;
+    in property <[NoteRow]> bin-notes;
+    in property <[NoteRow]> pinned-notes;
+    in property <[NoteRow]> archived-notes;
+    in property <[TagRow]> tags;
+    in property <[LinkRow]> backlinks;
+    in-out property <string> search-text;
+    // Quick switcher
+    in-out property <bool> palette-open;
+    in property <[PaletteItem]> palette-items;
+    in-out property <int> palette-index;
+    in property <string> palette-placeholder;
+    // Calendar
+    in-out property <bool> calendar-open;
+    in property <[CalendarDay]> calendar-days;
+    in property <string> calendar-title;
+    // Writing stats
+    in-out property <bool> stats-open;
+    in property <StatSummary> stats-summary;
+    in property <[StatCell]> stats-cells;
+    in property <string> clip-token;
+    callback copy-clip-token();
+    // Sync
+    in property <string> sync-location;
+    in property <bool> sync-active;
+    in property <string> google-drive-path;
+    // Finding things
+    in property <[string]> saved-searches;
+    in property <bool> search-saved;
+    in property <[TagRow]> notebooks;
+    in property <int> on-this-day-count;
+    in property <bool> show-saved: true;
+    in property <bool> show-notebooks: true;
+    // Tasks view
+    in-out property <bool> tasks-open;
+    in property <[TaskRow]> task-rows;
+    in property <int> open-task-count;
+    in-out property <bool> tasks-show-done;
+    // Spelling / lookup panel
+    in-out property <bool> words-open;
+    in property <string> words-mode;
+    in property <[SpellRow]> spell-rows;
+    in property <string> lookup-word;
+    in property <string> lookup-status;
+    in property <[LookupRow]> lookup-rows;
+    in property <int> note-count;
+    in property <int> word-count;
+
+    // Current note
+    in property <bool> has-note;
+    in property <string> current-id;
+    in-out property <string> note-title;
+    in-out property <string> note-body;
+    in property <int> note-words;
+    in property <[MdBlock]> blocks;
+    out property <int> sel-anchor: editor.sel-anchor;
+    out property <int> sel-cursor: editor.sel-cursor;
+
+    // @ suggestions
+    in property <[Suggestion]> suggestions;
+    in-out property <int> suggestion-index;
+
+    // Layout
+    in-out property <bool> sidebar-open: true;
+    in property <bool> show-active: true;
+    in property <bool> show-favorites: true;
+    in property <bool> show-recent: true;
+    in property <bool> show-all: true;
+    in property <bool> show-bin;
+    in property <bool> show-pinned: true;
+    in property <bool> show-tags: true;
+    in property <bool> show-archive;
+    in-out property <int> view-mode;
+    in-out property <bool> wide;
+    in-out property <bool> zen;
+    in-out property <bool> format-bar;
+    in property <string> clock;
+
+    // Reminders, settings, toasts
+    in property <[ReminderRow]> reminders;
+    in-out property <bool> reminders-open;
+    in-out property <bool> settings-open;
+    in-out property <bool> launch-at-login;
+    in-out property <bool> software-rendering;
+    in property <[string]> toast-actions;
+    // Writing helpers
+    in property <int> note-goal;
+    in-out property <bool> typewriter;
+    in-out property <bool> spotlight: true;
+    in-out property <bool> find-open;
+    in-out property <bool> find-replace;
+    in property <string> find-status;
+    // Focus timer: "24:13" while running, empty otherwise.
+    in property <string> timer-text;
+    in property <bool> timer-break;
+    in property <string> toast-text;
+    in property <bool> toast-error;
+    in property <bool> toast-visible;
+
+    callback new-note();
+    callback open-note(string);
+    callback close-note(string);
+    callback delete-note(string);
+    callback restore-note(string);
+    callback purge-note(string);
+    callback toggle-favorite(string);
+    callback toggle-pin(string);
+    callback toggle-archive(string);
+    callback duplicate-note(string);
+    callback open-sticky(string);
+    callback set-color(string, int);
+    callback open-tag(string);
+    // 0 = notes and commands, 1 = outline, 2 = templates.
+    callback open-palette(int);
+    callback palette-query(string);
+    callback palette-run(int);
+    callback palette-closed();
+    callback run-command(string);
+    // A key combination like "Ctrl+Shift+K"; true if a command used it.
+    callback handle-shortcut(string) -> bool;
+    in-out property <bool> shortcuts-open;
+    in property <[ShortcutRow]> shortcut-rows;
+    callback set-shortcut(string, string);
+    callback reset-shortcut(string);
+    callback open-shortcuts();
+    // Presentation mode
+    in property <bool> presenting;
+    in property <[MdBlock]> slide-blocks;
+    in property <int> slide-number;
+    in property <int> slide-count;
+    callback slide-step(int);
+    callback stop-presenting();
+    callback shortcut-filter-edited(string);
+    out property <bool> body-focused: editor.body-focused;
+    callback navigate(int);
+    callback open-calendar();
+    callback calendar-shift(int);
+    callback calendar-pick(string);
+    callback set-accent(string);
+    // Return true if the key was used.
+    callback table-tab(bool) -> bool;
+    callback table-enter() -> bool;
+    // +1 / -1 / 0 (reset).
+    callback zoom(int);
+    callback set-line-spacing(float);
+    // +1 / -1 / 0 (reset).
+    callback step-ui-scale(int);
+    callback set-spotlight(bool);
+    callback open-spelling();
+    callback spell-replace(string, string);
+    callback spell-ignore(string);
+    callback spell-add(string);
+    callback look-up-word();
+    callback open-tasks();
+    callback use-google-drive();
+    callback choose-sync-folder();
+    callback stop-syncing();
+    callback import-markdown-folder();
+    callback export-all();
+    callback save-search();
+    callback remove-saved-search(string);
+    callback apply-search(string);
+    callback open-on-this-day();
+    callback move-to-notebook(string);
+    callback task-toggle(string, int);
+    callback task-open(string, int);
+    callback tasks-show-done-changed(bool);
+    callback open-stats();
+    callback toggle-section(string);
+    callback search-edited(string);
+    callback sidebar-toggled(bool);
+    callback title-edited(string);
+    callback body-edited(string, int);
+    callback cursor-moved(int);
+    callback accept-suggestion(int);
+    callback dismiss-suggestions();
+    callback format(string);
+    callback toggle-task(int);
+    callback link-clicked(string);
+    callback delete-reminder(string);
+    callback set-theme(int);
+    callback set-font(string);
+    callback set-transparency(float);
+    callback set-wide(bool);
+    callback set-view-mode(int);
+    callback set-format-bar(bool);
+    callback set-launch-at-login(bool);
+    callback set-software-rendering(bool);
+    callback export-note();
+    callback import-zima();
+    callback open-notes-folder();
+    callback indent(bool);
+    // Return true if they handled the key (it's then swallowed).
+    callback auto-pair(string) -> bool;
+    callback paste-link() -> bool;
+    callback undo() -> bool;
+    callback redo() -> bool;
+    callback find-edited(string);
+    callback find-step(int);
+    callback replace-one(string);
+    callback replace-all(string);
+    callback find-closed();
+    callback toast-action(int);
+    callback stop-timer();
+    callback set-typewriter(bool);
+    callback open-reminder(string);
+
+    // Window
+    callback close-window();
+    callback minimize-window();
+    callback maximize-window();
+    callback drag-window();
+    callback resize-window(string);
+
+    public function focus-title() {
+        editor.focus-title();
+    }
+
+    public function focus-body() {
+        editor.focus-body();
+    }
+
+    // Somewhere for keystrokes to go: the text in edit/split, the shortcut handler in preview.
+    public function focus-palette() {
+        switcher.focus-input();
+    }
+
+    function f-key(event: KeyEvent) -> string {
+        return event.text == Key.F1 ? "F1" : event.text == Key.F2 ? "F2" : event.text == Key.F3 ? "F3" : event.text == Key.F4 ? "F4" : event.text == Key.F5 ? "F5" : event.text == Key.F6 ? "F6" : event.text == Key.F7 ? "F7" : event.text == Key.F8 ? "F8" : event.text == Key.F9 ? "F9" : event.text == Key.F10 ? "F10" : event.text == Key.F11 ? "F11" : event.text == Key.F12 ? "F12" : "";
+    }
+
+    public function focus-default() {
+        if (root.view-mode == 2 || !root.has-note) {
+            keys.focus();
+        } else {
+            editor.focus-body();
+        }
+    }
+
+    public function select-in-body(anchor: int, cursor: int) {
+        editor.select-in-body(anchor, cursor);
+    }
+
+
+    public function open-find(replace: bool) {
+        root.find-open = true;
+        root.find-replace = replace;
+        editor.focus-find();
+    }
+
+    public function set-body-selection(anchor: int, cursor: int) {
+        editor.set-body-selection(anchor, cursor);
+    }
+
+    function toggle-sidebar() {
+        root.sidebar-open = !root.sidebar-open;
+        root.sidebar-toggled(root.sidebar-open);
+    }
+
+    function change-view-mode(mode: int) {
+        root.view-mode = mode;
+        root.set-view-mode(mode);
+    }
+
+    // The text field is hidden in preview; keep keyboard focus so shortcuts still work.
+    changed view-mode => {
+        if (root.view-mode == 2) {
+            keys.focus();
+        } else {
+            editor.focus-body();
+        }
+    }
+
+    property <length> bar-height: 44px;
+    property <length> sidebar-width: 260px;
+    property <length> edge: 5px;
+    property <length> corner: 10px;
+
+    init => {
+        editor.focus-body();
+    }
+
+    // Window backdrop; its opacity is the transparency setting.
+    Rectangle {
+        background: Theme.backdrop;
+        opacity: Theme.surface-alpha;
+    }
+
+    // App-wide shortcuts, seen before the focused text field. It's focused explicitly (focus-default)
+    // when there's no text field to type in, e.g. in preview. Not on click: that swallowed the click.
+    keys := FocusScope {
+        focus-on-click: false;
+
+        capture-key-pressed(event) => {
+
+            // @ suggestions take the arrow keys, Tab, Enter and Esc while open.
+            if (root.suggestions.length > 0) {
+                if (event.text == Key.UpArrow) {
+                    root.suggestion-index = Math.max(0, root.suggestion-index - 1);
+                    return accept;
+                }
+                if (event.text == Key.DownArrow) {
+                    root.suggestion-index = Math.min(root.suggestions.length - 1, root.suggestion-index + 1);
+                    return accept;
+                }
+                if (event.text == Key.Tab || event.text == Key.Return) {
+                    root.accept-suggestion(root.suggestion-index);
+                    return accept;
+                }
+                if (event.text == Key.Escape) {
+                    root.dismiss-suggestions();
+                    return accept;
+                }
+            }
+            // Writing helpers in the body: Tab indents lists, brackets pair up.
+            if (editor.body-focused && !event.modifiers.control && !event.modifiers.alt) {
+                if (event.text == Key.Tab || event.text == Key.Backtab) {
+                    // In a table, Tab moves between cells; elsewhere it indents.
+                    if (root.table-tab(event.modifiers.shift || event.text == Key.Backtab)) {
+                        return accept;
+                    }
+                    root.indent(event.modifiers.shift || event.text == Key.Backtab);
+                    return accept;
+                }
+                if (event.text == Key.Return && !event.modifiers.shift && root.table-enter()) {
+                    return accept;
+                }
+                if (event.text == "(" || event.text == "[" || event.text == "`" || event.text == ")" || event.text == "]" || event.text == "*" || event.text == "_") {
+                    if (root.auto-pair(event.text)) {
+                        return accept;
+                    }
+                }
+            }
+            // Rebindable shortcuts (Settings → Keyboard shortcuts) are decided in Rust.
+            if (event.modifiers.control || event.modifiers.alt || root.f-key(event) != "") {
+                if (root.handle-shortcut((event.modifiers.control ? "Ctrl+" : "") + (event.modifiers.alt ? "Alt+" : "")
+                        + (event.modifiers.shift ? "Shift+" : "") + (root.f-key(event) != "" ? root.f-key(event) : event.text.to-uppercase()))) {
+                    return accept;
+                }
+            }
+            if (event.text == Key.Escape) {
+                if (root.words-open) {
+                    root.words-open = false;
+                    return accept;
+                }
+                if (root.find-open) {
+                    root.find-open = false;
+                    root.find-closed();
+                    return accept;
+                }
+                if (root.shortcuts-open) {
+                    root.shortcuts-open = false;
+                    return accept;
+                }
+                if (root.settings-open || root.reminders-open || root.calendar-open || root.stats-open || root.tasks-open) {
+                    root.settings-open = false;
+                    root.reminders-open = false;
+                    root.calendar-open = false;
+                    root.stats-open = false;
+                    root.tasks-open = false;
+                    return accept;
+                }
+                if (root.zen) {
+                    root.zen = false;
+                    return accept;
+                }
+            }
+            // Outside a text field: arrows move through notes, Delete moves the note to the Bin.
+            if (keys.has-focus && !event.modifiers.control && !event.modifiers.alt && root.has-note) {
+                if (event.text == Key.UpArrow) {
+                    root.navigate(-1);
+                    return accept;
+                }
+                if (event.text == Key.DownArrow) {
+                    root.navigate(1);
+                    return accept;
+                }
+                if (event.text == Key.Delete) {
+                    root.delete-note(root.current-id);
+                    return accept;
+                }
+            }
+            // Alt+↑ / Alt+↓ move lines.
+            if (editor.body-focused && event.modifiers.alt && !event.modifiers.control) {
+                if (event.text == Key.UpArrow) {
+                    root.format("move-up");
+                    return accept;
+                }
+                if (event.text == Key.DownArrow) {
+                    root.format("move-down");
+                    return accept;
+                }
+            }
+            if (event.modifiers.control && !event.modifiers.alt) {
+                // Text size: Ctrl + / Ctrl − / Ctrl 0 (with or without Shift, for different layouts).
+                if (event.text == "=" || event.text == "+") {
+                    root.zoom(1);
+                    return accept;
+                }
+                if (event.text == "-" || event.text == "_") {
+                    root.zoom(-1);
+                    return accept;
+                }
+                if (event.text == "0") {
+                    root.zoom(0);
+                    return accept;
+                }
+                if (event.modifiers.shift) {
+                    if ((event.text == "d" || event.text == "D") && editor.body-focused) {
+                        root.format("duplicate-line");
+                        return accept;
+                    }
+                    return reject;
+                }
+                if (editor.body-focused) {
+                    if (event.text == "v" && root.paste-link()) {
+                        return accept;
+                    }
+                    if (event.text == "z" && root.undo()) {
+                        return accept;
+                    }
+                    if (event.text == "y" && root.redo()) {
+                        return accept;
+                    }
+                }
+            }
+            return reject;
+        }
+
+        HorizontalLayout {
+            // Sidebar slides open and closed (and hides in zen mode).
+            Rectangle {
+                width: root.sidebar-open && !root.zen ? root.sidebar-width : 0px;
+                animate width { duration: 220ms; easing: ease-out; }
+                clip: true;
+
+                Sidebar {
+                    x: 0;
+                    width: root.sidebar-width;
+                    height: 100%;
+                    top-bar-height: root.bar-height;
+                    active-notes: root.active-notes;
+                    favorite-notes: root.favorite-notes;
+                    recent-notes: root.recent-notes;
+                    all-notes: root.all-notes;
+                    bin-notes: root.bin-notes;
+                    pinned-notes: root.pinned-notes;
+                    archived-notes: root.archived-notes;
+                    tags: root.tags;
+                    show-pinned: root.show-pinned;
+                    show-tags: root.show-tags;
+                    show-archive: root.show-archive;
+                    search-text <=> root.search-text;
+                    toggle-pin(id) => { root.toggle-pin(id); }
+                    toggle-archive(id) => { root.toggle-archive(id); }
+                    duplicate-note(id) => { root.duplicate-note(id); }
+                    open-sticky(id) => { root.open-sticky(id); }
+                    set-color(id, c) => { root.set-color(id, c); }
+                    open-tag(name) => { root.open-tag(name); }
+                    empty-bin => { root.run-command("empty-bin"); }
+                    open-stats => { root.run-command("stats"); }
+                    open-task-count: root.open-task-count;
+                    open-tasks => { root.open-tasks(); }
+                    saved-searches: root.saved-searches;
+                    search-saved: root.search-saved;
+                    notebooks: root.notebooks;
+                    on-this-day-count: root.on-this-day-count;
+                    show-saved: root.show-saved;
+                    show-notebooks: root.show-notebooks;
+                    save-search => { root.save-search(); }
+                    remove-saved-search(query) => { root.remove-saved-search(query); }
+                    apply-search(query) => { root.apply-search(query); }
+                    open-on-this-day => { root.open-on-this-day(); }
+                    move-to-notebook(id) => { root.move-to-notebook(id); }
+                    show-active: root.show-active;
+                    show-favorites: root.show-favorites;
+                    show-recent: root.show-recent;
+                    show-all: root.show-all;
+                    show-bin: root.show-bin;
+                    note-count: root.note-count;
+                    word-count: root.word-count;
+                    drag-window => { root.drag-window(); }
+                    new-note => { root.new-note(); }
+                    open-note(id) => { root.open-note(id); }
+                    close-note(id) => { root.close-note(id); }
+                    delete-note(id) => { root.delete-note(id); }
+                    restore-note(id) => { root.restore-note(id); }
+                    purge-note(id) => { root.purge-note(id); }
+                    toggle-favorite(id) => { root.toggle-favorite(id); }
+                    toggle-section(name) => { root.toggle-section(name); }
+                    search-edited(query) => { root.search-edited(query); }
+                }
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Theme.rule;
+                }
+            }
+
+            VerticalLayout {
+                // Title bar: drag anywhere; in zen mode it fades out until hovered.
+                bar := TouchArea {
+                    height: root.bar-height;
+
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+                            root.drag-window();
+                        }
+                    }
+
+                    Rectangle {
+                        opacity: root.zen && !bar.has-hover ? 0 : 1;
+                        animate opacity { duration: 250ms; }
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 16px;
+                            spacing: 4px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    description: "Toggle sidebar";
+                                    icon: Icons.sidebar;
+                                    clicked => { root.toggle-sidebar(); }
+                                }
+                            }
+
+                            // Clock; click for the calendar.
+                            Rectangle {
+                                width: clock-text.preferred-width + 12px;
+                                clock-touch := TouchArea {
+                                    clicked => {
+                                        root.settings-open = false;
+                                        root.reminders-open = false;
+                                        root.open-calendar();
+                                    }
+                                }
+                                Rectangle {
+                                    y: (parent.height - 26px) / 2;
+                                    height: 26px;
+                                    border-radius: 6px;
+                                    background: clock-touch.has-hover || root.calendar-open ? Theme.hover : transparent;
+                                }
+                                clock-text := Text {
+                                    text: root.clock;
+                                    color: clock-touch.has-hover ? Theme.ink-soft : Theme.muted;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            // Focus timer: click to stop.
+                            if root.timer-text != "": VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: timer-row.preferred-width + 16px;
+                                    height: 24px;
+                                    border-radius: 12px;
+                                    background: timer-touch.has-hover ? Theme.selected : (root.timer-break ? #3fb95026 : Theme.accent.with-alpha(0.16));
+
+                                    timer-row := HorizontalLayout {
+                                        x: 8px;
+                                        spacing: 5px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Icon {
+                                                width: 12px;
+                                                height: 12px;
+                                                commands: timer-touch.has-hover ? Icons.stop : Icons.timer;
+                                                stroke: root.timer-break ? #3fb950 : Theme.accent;
+                                            }
+                                        }
+                                        Text {
+                                            text: (root.timer-break ? "Break " : "") + root.timer-text;
+                                            color: root.timer-break ? #3fb950 : Theme.accent;
+                                            font-size: 12px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    timer-touch := TouchArea {
+                                        clicked => { root.stop-timer(); }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: root.timer-text != "" ? 8px : 0px;
+                            }
+
+                            // Edit / Split / Preview (Ctrl+E cycles).
+                            VerticalLayout {
+                                alignment: center;
+                                visible: root.has-note;
+                                Rectangle {
+                                    border-radius: 7px;
+                                    background: Theme.hover;
+                                    HorizontalLayout {
+                                        padding: 2px;
+                                        spacing: 1px;
+                                        ModeButton {
+                                            description: "Edit mode";
+                                            icon: Icons.edit;
+                                            selected: root.view-mode == 0;
+                                            clicked => { root.change-view-mode(0); }
+                                        }
+                                        ModeButton {
+                                            description: "Split view";
+                                            icon: Icons.split;
+                                            selected: root.view-mode == 1;
+                                            clicked => { root.change-view-mode(1); }
+                                        }
+                                        ModeButton {
+                                            description: "Preview mode";
+                                            icon: Icons.eye;
+                                            selected: root.view-mode == 2;
+                                            clicked => { root.change-view-mode(2); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: 6px;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    description: "Text settings";
+                                    icon: Icons.type;
+                                    active: root.format-bar;
+                                    clicked => {
+                                        root.format-bar = !root.format-bar;
+                                        root.set-format-bar(root.format-bar);
+                                    }
+                                }
+                            }
+
+                            // Bell with a count of upcoming reminders.
+                            Rectangle {
+                                width: 26px;
+
+                                IconButton {
+                                    description: "Reminders";
+                                    icon: Icons.bell;
+                                    active: root.reminders-open;
+                                    clicked => {
+                                        root.settings-open = false;
+                                        root.reminders-open = !root.reminders-open;
+                                    }
+                                }
+
+                                if root.reminders.length > 0: Rectangle {
+                                    x: 15px;
+                                    y: parent.height / 2 - 13px;
+                                    width: max(15px, badge.preferred-width + 8px);
+                                    height: 15px;
+                                    border-radius: 7.5px;
+                                    background: Theme.accent;
+                                    border-width: 2px;
+                                    border-color: Theme.paper;
+
+                                    badge := Text {
+                                        text: root.reminders.length;
+                                        color: Theme.on-accent;
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    description: "Settings";
+                                    icon: Icons.settings;
+                                    active: root.settings-open;
+                                    clicked => {
+                                        root.reminders-open = false;
+                                        root.settings-open = !root.settings-open;
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: 12px;
+                            }
+
+                            // Window controls: minimize, zoom, close (close nearest the edge).
+                            // Icons appear when hovering the group, like macOS.
+                            lights := TouchArea {
+                                width: 12px * 3 + 8px * 2;
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: center;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        TrafficLight {
+                                            base: #febc2e;
+                                            description: "Minimise";
+                                            icon: "M 3.5 6 L 8.5 6";
+                                            glyph-color: #995700;
+                                            show-glyph: lights.has-hover;
+                                            clicked => { root.minimize-window(); }
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        TrafficLight {
+                                            base: #28c840;
+                                            // Two corner triangles, like the macOS full-screen icon.
+                                            description: "Maximise";
+                                            icon: "M 3.4 8.6 L 3.4 4.6 L 7.4 8.6 Z M 8.6 3.4 L 8.6 7.4 L 4.6 3.4 Z";
+                                            filled: true;
+                                            glyph-color: #006500;
+                                            show-glyph: lights.has-hover;
+                                            clicked => { root.maximize-window(); }
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        TrafficLight {
+                                            base: #ff5f57;
+                                            description: "Close window";
+                                            icon: "M 4 4 L 8 8 M 8 4 L 4 8";
+                                            glyph-color: #4d0000;
+                                            show-glyph: lights.has-hover;
+                                            clicked => { root.close-window(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Current note title, centered over the whole bar.
+                        Text {
+                            width: max(0px, parent.width - 600px);
+                            text: !root.has-note ? "" : root.note-title.is-empty ? "Untitled" : root.note-title;
+                            overflow: elide;
+                            color: Theme.muted;
+                            font-size: 13px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.rule;
+                    opacity: root.zen ? 0 : 1;
+                }
+
+                // Formatting toolbar (Ctrl+B / I / U also work without it).
+                Rectangle {
+                    height: root.format-bar && !root.zen && root.has-note && root.view-mode != 2 ? 40px : 0px;
+                    animate height { duration: 180ms; easing: ease-out; }
+                    clip: true;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+
+                        FormatButton { tooltip: "Bold"; label: "B"; label-weight: 800; clicked => { root.format("bold"); } }
+                        FormatButton { tooltip: "Italic"; label: "I"; label-weight: 500; label-italic: true; clicked => { root.format("italic"); } }
+                        FormatButton { tooltip: "Underline"; label: "U"; label-weight: 500; clicked => { root.format("underline"); } }
+                        FormatButton { tooltip: "Strikethrough"; label: "S"; label-weight: 500; clicked => { root.format("strike"); } }
+                        Rectangle { width: 1px; background: Theme.rule; }
+                        FormatButton { tooltip: "Heading"; label: "H"; label-weight: 700; clicked => { root.format("heading"); } }
+                        FormatButton { tooltip: "Bulleted list"; icon: Icons.bullets; clicked => { root.format("bullet"); } }
+                        FormatButton { tooltip: "Numbered list"; icon: Icons.numbers; clicked => { root.format("number"); } }
+                        FormatButton { tooltip: "Checklist"; icon: Icons.task; clicked => { root.format("task"); } }
+                        Rectangle { width: 1px; background: Theme.rule; }
+                        FormatButton { tooltip: "Quote"; icon: Icons.quote; clicked => { root.format("quote"); } }
+                        FormatButton { tooltip: "Code"; icon: Icons.code; clicked => { root.format("code"); } }
+                    }
+
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Theme.rule;
+                    }
+                }
+
+                editor := Editor {
+                    vertical-stretch: 1;
+                    has-note: root.has-note;
+                    current-id: root.current-id;
+                    note-title <=> root.note-title;
+                    note-body <=> root.note-body;
+                    note-words: root.note-words;
+                    view-mode: root.view-mode;
+                    wide: root.wide;
+                    show-status: !root.zen;
+                    blocks: root.blocks;
+                    suggestions: root.suggestions;
+                    suggestion-index <=> root.suggestion-index;
+                    title-edited(text) => { root.title-edited(text); }
+                    body-edited(text, cursor) => { root.body-edited(text, cursor); }
+                    cursor-moved(cursor) => { root.cursor-moved(cursor); }
+                    new-note => { root.new-note(); }
+                    toggle-task(line) => { root.toggle-task(line); }
+                    link-clicked(url) => { root.link-clicked(url); }
+                    note-goal: root.note-goal;
+                    typewriter: root.typewriter && root.zen;
+                    spotlight: root.spotlight && root.zen;
+                    find-open <=> root.find-open;
+                    find-replace <=> root.find-replace;
+                    find-status: root.find-status;
+                    find-edited(query) => { root.find-edited(query); }
+                    find-step(delta) => { root.find-step(delta); }
+                    replace-one(text) => { root.replace-one(text); }
+                    replace-all(text) => { root.replace-all(text); }
+                    find-closed => { root.find-closed(); }
+                    backlinks: root.backlinks;
+                    open-note(id) => { root.open-note(id); }
+                }
+            }
+        }
+    }
+
+    // Popovers; clicking anywhere else closes them.
+    if root.reminders-open || root.settings-open || root.calendar-open: TouchArea {
+        clicked => {
+            root.reminders-open = false;
+            root.settings-open = false;
+            root.calendar-open = false;
+        }
+    }
+
+    // Spelling and lookup, docked top-right; stays open while you edit.
+    if root.words-open && root.has-note: WordsPanel {
+        x: root.width - self.width - 14px;
+        y: root.bar-height + 8px;
+        limit-height: root.height - root.bar-height - 60px;
+        mode: root.words-mode;
+        spell-rows: root.spell-rows;
+        lookup-word: root.lookup-word;
+        lookup-status: root.lookup-status;
+        lookup-rows: root.lookup-rows;
+        replace(word, with) => { root.spell-replace(word, with); }
+        ignore(word) => { root.spell-ignore(word); }
+        add-word(word) => { root.spell-add(word); }
+        close => { root.words-open = false; }
+    }
+
+    // Tasks view, centred over a dimmed window.
+    if root.tasks-open: Rectangle {
+        background: #00000040;
+        TouchArea {
+            clicked => { root.tasks-open = false; }
+        }
+        TasksPopover {
+            x: (parent.width - self.width) / 2;
+            y: 56px;
+            limit-height: parent.height - 100px;
+            rows: root.task-rows;
+            open-count: root.open-task-count;
+            show-done <=> root.tasks-show-done;
+            toggle(note, line) => { root.task-toggle(note, line); }
+            open-task(note, line) => { root.task-open(note, line); }
+            show-done-changed(on) => { root.tasks-show-done-changed(on); }
+            close => { root.tasks-open = false; }
+        }
+    }
+
+    // Writing stats, centred over a dimmed window.
+    if root.stats-open: Rectangle {
+        background: #00000040;
+        TouchArea {
+            clicked => { root.stats-open = false; }
+        }
+        StatsPopover {
+            x: (parent.width - self.width) / 2;
+            y: max(56px, (parent.height - self.height) / 2 - 40px);
+            summary: root.stats-summary;
+            cells: root.stats-cells;
+            close => { root.stats-open = false; }
+        }
+    }
+
+    if root.calendar-open: CalendarPopover {
+        x: (root.sidebar-open && !root.zen ? root.sidebar-width : 0px) + 40px;
+        y: root.bar-height + 4px;
+        title: root.calendar-title;
+        days: root.calendar-days;
+        shift(months) => { root.calendar-shift(months); }
+        pick(date) => { root.calendar-pick(date); }
+    }
+
+    // Always built (destroying it under the mouse swallows the next click); its click areas switch off when closed.
+    switcher := QuickSwitcher {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        visible: root.palette-open;
+        open: root.palette-open;
+        items: root.palette-items;
+        placeholder: root.palette-placeholder;
+        index <=> root.palette-index;
+        query(text) => { root.palette-query(text); }
+        run(i) => { root.palette-run(i); }
+        close => { root.palette-closed(); }
+    }
+
+    if root.reminders-open: ReminderPopover {
+        x: root.width - self.width - 14px;
+        y: root.bar-height + 4px;
+        reminders: root.reminders;
+        delete-reminder(id) => { root.delete-reminder(id); }
+        open-reminder(id) => {
+            root.reminders-open = false;
+            root.open-reminder(id);
+        }
+    }
+
+    if root.settings-open: SettingsPopover {
+        x: root.width - self.width - 14px;
+        y: root.bar-height + 4px;
+        limit-height: root.height - root.bar-height - 16px;
+        wide <=> root.wide;
+        zen <=> root.zen;
+        typewriter <=> root.typewriter;
+        launch-at-login <=> root.launch-at-login;
+        software-rendering <=> root.software-rendering;
+        set-software-rendering(on) => { root.set-software-rendering(on); }
+        set-typewriter(on) => { root.set-typewriter(on); }
+        has-note: root.has-note;
+        set-theme(index) => { root.set-theme(index); }
+        set-accent(hex) => { root.set-accent(hex); }
+        clip-token: root.clip-token;
+        copy-clip-token => { root.copy-clip-token(); }
+        sync-location: root.sync-location;
+        sync-active: root.sync-active;
+        google-drive-path: root.google-drive-path;
+        use-google-drive => { root.settings-open = false; root.use-google-drive(); }
+        choose-sync-folder => { root.settings-open = false; root.choose-sync-folder(); }
+        stop-syncing => { root.settings-open = false; root.stop-syncing(); }
+        import-markdown-folder => { root.settings-open = false; root.import-markdown-folder(); }
+        export-all => { root.settings-open = false; root.export-all(); }
+        spotlight <=> root.spotlight;
+        zoom(step) => { root.zoom(step); }
+        set-line-spacing(value) => { root.set-line-spacing(value); }
+        step-ui-scale(step) => { root.step-ui-scale(step); }
+        set-spotlight(on) => { root.set-spotlight(on); }
+        set-font(font) => { root.set-font(font); }
+        set-transparency(value) => { root.set-transparency(value); }
+        set-wide(on) => { root.set-wide(on); }
+        set-zen(on) => { root.settings-open = false; }
+        set-launch-at-login(on) => { root.set-launch-at-login(on); }
+        export-note => { root.settings-open = false; root.export-note(); }
+        import-zima => { root.settings-open = false; root.import-zima(); }
+        open-notes-folder => { root.settings-open = false; root.open-notes-folder(); }
+        open-shortcuts => { root.open-shortcuts(); }
+        edit-theme => { root.settings-open = false; root.run-command("edit-theme"); }
+    }
+
+    if root.shortcuts-open: ShortcutsPopover {
+        x: (root.width - self.width) / 2;
+        y: root.bar-height + 20px;
+        limit-height: root.height - root.bar-height - 40px;
+        rows: root.shortcut-rows;
+        set-shortcut(id, combo) => { root.set-shortcut(id, combo); }
+        reset-shortcut(id) => { root.reset-shortcut(id); }
+        filter-edited(text) => { root.shortcut-filter-edited(text); }
+        close => { root.shortcuts-open = false; root.focus-default(); }
+    }
+
+    if root.presenting: Presentation {
+        width: root.width;
+        height: root.height;
+        blocks: root.slide-blocks;
+        number: root.slide-number;
+        count: root.slide-count;
+        step(delta) => { root.slide-step(delta); }
+        stop => { root.stop-presenting(); }
+        link-clicked(url) => { root.link-clicked(url); }
+    }
+
+    // Toasts sit at the bottom centre, clear of popovers and the find bar.
+    Toast {
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 44px;
+        text: root.toast-text;
+        error: root.toast-error;
+        shown: root.toast-visible;
+        actions: root.toast-actions;
+        action(index) => { root.toast-action(index); }
+    }
+
+    // Resize handles, drawn on top of everything else.
+    ResizeEdge {
+        x: root.corner;
+        y: 0;
+        width: root.width - 2 * root.corner;
+        height: root.edge;
+        direction: "n";
+        mouse-cursor: ns-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+    ResizeEdge {
+        x: root.corner;
+        y: root.height - root.edge;
+        width: root.width - 2 * root.corner;
+        height: root.edge;
+        direction: "s";
+        mouse-cursor: ns-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+    ResizeEdge {
+        x: 0;
+        y: root.corner;
+        width: root.edge;
+        height: root.height - 2 * root.corner;
+        direction: "w";
+        mouse-cursor: ew-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+    ResizeEdge {
+        x: root.width - root.edge;
+        y: root.corner;
+        width: root.edge;
+        height: root.height - 2 * root.corner;
+        direction: "e";
+        mouse-cursor: ew-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+    ResizeEdge {
+        x: 0;
+        y: 0;
+        width: root.corner;
+        height: root.corner;
+        direction: "nw";
+        mouse-cursor: nwse-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+    ResizeEdge {
+        x: root.width - root.corner;
+        y: 0;
+        width: root.corner;
+        height: root.corner;
+        direction: "ne";
+        mouse-cursor: nesw-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+    ResizeEdge {
+        x: 0;
+        y: root.height - root.corner;
+        width: root.corner;
+        height: root.corner;
+        direction: "sw";
+        mouse-cursor: nesw-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+    ResizeEdge {
+        x: root.width - root.corner;
+        y: root.height - root.corner;
+        width: root.corner;
+        height: root.corner;
+        direction: "se";
+        mouse-cursor: nwse-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+}

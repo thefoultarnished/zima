@@ -1,0 +1,93 @@
+import { Theme } from "theme.slint";
+import { Icon, Icons } from "widgets.slint";
+
+// Quick capture (Ctrl+Alt+N from anywhere): jot a note or an @remind without opening Zima.
+export component CaptureWindow inherits Window {
+    title: "Quick note";
+    icon: @image-url("icon.svg");
+    no-frame: true;
+    always-on-top: true;
+    preferred-width: 540px;
+    preferred-height: 150px;
+    background: Theme.popover;
+    default-font-family: "Inter";
+
+    callback save(string);
+    callback cancel();
+
+    public function reset() {
+        input.text = "";
+        input.focus();
+    }
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Theme.rule;
+    }
+
+    keys := FocusScope {
+        focus-on-click: false;
+        capture-key-pressed(event) => {
+            if (event.text == Key.Return && !event.modifiers.shift) {
+                root.save(input.text);
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                root.cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                }
+                Text {
+                    text: "Quick note";
+                    color: Theme.ink-soft;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "Enter to save  ·  Shift+Enter new line  ·  Esc to close";
+                    color: Theme.muted;
+                    font-size: 11px;
+                }
+            }
+
+            input := TextInput {
+                vertical-stretch: 1;
+                single-line: false;
+                wrap: word-wrap;
+                font-family: Theme.font;
+                font-size: 17px;
+                color: Theme.ink;
+                selection-background-color: Theme.selection;
+                selection-foreground-color: Theme.ink;
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    visible: input.text.is-empty;
+                    text: "Write something\u{2026}  (first line becomes the title; \u{201c}@remind me to \u{2026} at 5pm\u{201d} sets a reminder)";
+                    color: Theme.muted;
+                    font-size: 15px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

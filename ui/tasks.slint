@@ -1,0 +1,199 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icon, IconButton, Icons, Toggle } from "widgets.slint";
+
+export struct TaskRow {
+    // Non-empty for a group heading row ("Overdue", "Today", …); the other fields are then unused.
+    header: string,
+    note-id: string,
+    note-title: string,
+    line: int,
+    text: string,
+    done: bool,
+    // "Today", "Fri 9 Oct", "Overdue · Mon 5 Oct", "every monday" …
+    due: string,
+    overdue: bool,
+}
+
+// All checkboxes from all notes, grouped by due date.
+export component TasksPopover {
+    in property <[TaskRow]> rows;
+    in property <int> open-count;
+    in-out property <bool> show-done;
+    in property <length> limit-height: 600px;
+    callback toggle(string, int);
+    callback open-task(string, int);
+    callback show-done-changed(bool);
+    callback close();
+
+    width: 600px;
+    height: min(content.preferred-height + 60px, root.limit-height);
+
+    TouchArea { }
+
+    Rectangle {
+        border-radius: 14px;
+        background: Theme.popover;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-blur: 32px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: #00000050;
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            height: 56px;
+            padding-left: 18px;
+            padding-right: 10px;
+            spacing: 10px;
+
+            Text {
+                text: "Tasks";
+                color: Theme.ink;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.open-count + " open";
+                color: Theme.muted;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: "Show done";
+                color: Theme.muted;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                Toggle {
+                    checked <=> root.show-done;
+                    description: "Show done";
+                    toggled(on) => { root.show-done-changed(on); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    description: "Close";
+                    icon: Icons.close;
+                    clicked => { root.close(); }
+                }
+            }
+        }
+
+        scroll := ScrollView {
+            content := VerticalLayout {
+                width: scroll.visible-width;
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 14px;
+                spacing: 1px;
+
+                if root.rows.length == 0: Text {
+                    height: 80px;
+                    text: "No tasks. Add some with \u{201c}- [ ] \u{2026}\u{201d} in any note (\u{201c}@due fri\u{201d} adds a date).";
+                    color: Theme.muted;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                for row in root.rows: Rectangle {
+                    height: row.header != "" ? 34px : 38px;
+
+                    if row.header != "": Text {
+                        x: 8px;
+                        y: 12px;
+                        text: row.header.to-uppercase();
+                        color: row.header == "Overdue" ? Theme.danger : Theme.muted;
+                        font-size: 10.5px;
+                        font-weight: 700;
+                        letter-spacing: 1.1px;
+                    }
+
+                    if row.header == "": task := Rectangle {
+                        border-radius: 8px;
+                        background: row-touch.has-hover ? Theme.hover : transparent;
+
+                        row-touch := TouchArea {
+                            clicked => { root.open-task(row.note-id, row.line); }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 10px;
+                            spacing: 10px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 16px;
+                                    height: 16px;
+                                    border-radius: 4px;
+                                    background: row.done ? Theme.accent : box-touch.has-hover ? Theme.hover : transparent;
+                                    border-width: row.done ? 0 : 1.5px;
+                                    border-color: row.overdue ? Theme.danger : Theme.muted;
+
+                                    if row.done: Icon {
+                                        width: 12px;
+                                        height: 12px;
+                                        commands: Icons.check;
+                                        stroke: Theme.on-accent;
+                                        stroke-width: 1.8px;
+                                    }
+
+                                    box-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.toggle(row.note-id, row.line); }
+                                    }
+                                }
+                            }
+
+                            Text {
+                                horizontal-stretch: 1;
+                                text: row.text;
+                                overflow: elide;
+                                color: row.done ? Theme.muted : Theme.ink;
+                                font-size: 13.5px;
+                                vertical-alignment: center;
+                            }
+
+                            if row.due != "": VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: due-text.preferred-width + 14px;
+                                    height: 20px;
+                                    border-radius: 10px;
+                                    background: row.overdue ? Theme.danger.with-alpha(0.15) : Theme.hover;
+                                    due-text := Text {
+                                        text: row.due;
+                                        color: row.overdue ? Theme.danger : Theme.ink-soft;
+                                        font-size: 11px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                width: 120px;
+                                text: row.note-title;
+                                overflow: elide;
+                                color: Theme.muted;
+                                font-size: 11.5px;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

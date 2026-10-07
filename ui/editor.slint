@@ -1,0 +1,630 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icon, Icons } from "widgets.slint";
+
+component FindButton {
+    in property <string> icon;
+    in property <bool> active;
+    callback clicked();
+
+    width: 26px;
+    height: 28px;
+
+    Rectangle {
+        border-radius: 6px;
+        background: touch.pressed || root.active ? Theme.selected : touch.has-hover ? Theme.hover : transparent;
+    }
+
+    Icon {
+        width: 12px;
+        height: 12px;
+        commands: root.icon;
+        stroke: touch.has-hover || root.active ? Theme.ink : Theme.muted;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component TextButton {
+    in property <string> label;
+    callback clicked();
+
+    width: text.preferred-width + 18px;
+    height: 28px;
+
+    Rectangle {
+        border-radius: 6px;
+        background: touch.pressed ? Theme.selected : touch.has-hover ? Theme.hover : Theme.hover.with-alpha(0.5);
+    }
+
+    text := Text {
+        text: root.label;
+        color: Theme.ink-soft;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+import { BlockView, MdBlock } from "markdown.slint";
+
+export struct LinkRow {
+    id: string,
+    title: string,
+}
+
+export struct Suggestion {
+    name: string,
+    hint: string,
+}
+
+// The writing column: title + body text, optionally with a live Markdown preview.
+export component Editor {
+    in property <bool> has-note;
+    in property <string> current-id;
+    in-out property <string> note-title;
+    in-out property <string> note-body;
+    in property <int> note-words;
+    // Word goal for this note; 0 = none.
+    in property <int> note-goal;
+    // Keep the cursor line centred (only in zen mode).
+    in property <bool> typewriter;
+    // Fade the text above and below the cursor line (zen mode).
+    in property <bool> spotlight;
+    // Find bar.
+    in-out property <bool> find-open;
+    in-out property <bool> find-replace;
+    in property <string> find-status;
+    // 0 = edit, 1 = split, 2 = preview.
+    in property <int> view-mode;
+    in property <bool> wide;
+    in property <bool> show-status: true;
+    in property <[MdBlock]> blocks;
+    in property <[Suggestion]> suggestions;
+    in-out property <int> suggestion-index;
+
+    // Selection in the body, for formatting commands.
+    out property <int> sel-anchor: body.anchor-position-byte-offset;
+    out property <int> sel-cursor: body.cursor-position-byte-offset;
+    out property <bool> body-focused: body.has-focus;
+
+    callback title-edited(string);
+    // The text and the cursor's byte offset.
+    callback body-edited(string, int);
+    callback cursor-moved(int);
+    callback new-note();
+    callback toggle-task(int);
+    callback link-clicked(string);
+    callback open-note(string);
+    // Notes linking here with [[…]], shown under the preview.
+    in property <[LinkRow]> backlinks;
+    callback find-edited(string);
+    callback find-step(int);
+    callback replace-one(string);
+    callback replace-all(string);
+    callback find-closed();
+
+    public function focus-find() {
+        find-input.focus();
+        find-input.select-all();
+    }
+
+
+    // Select text without taking focus (find highlights a match while you keep typing in the find box).
+    public function select-in-body(anchor: int, cursor: int) {
+        body.set-selection-offsets(anchor, cursor);
+    }
+
+    public function focus-title() {
+        title.focus();
+    }
+
+    public function focus-body() {
+        body.focus();
+    }
+
+    public function set-body-selection(anchor: int, cursor: int) {
+        body.focus();
+        body.set-selection-offsets(anchor, cursor);
+    }
+
+    // Start each note scrolled to the top.
+    changed current-id => {
+        scroll.content-y = 0;
+        preview.content-y = 0;
+    }
+
+    property <length> edit-width: root.view-mode == 2 ? 0px : root.view-mode == 1 ? root.width / 2 : root.width;
+    property <length> font-size: 16px * Theme.text-scale;
+
+    // Edit pane
+    scroll := ScrollView {
+        x: 0;
+        width: root.edit-width;
+        visible: root.has-note && root.view-mode != 2;
+
+        property <length> column-width: root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
+        property <length> column-x: (self.visible-width - self.column-width) / 2;
+        property <length> pad-top: 36px;
+        property <length> pad-bottom: root.typewriter ? self.visible-height * 0.55 : 120px;
+        property <length> body-y: title.y + title.height + 14px;
+        property <Point> cursor;
+
+        content-width: self.visible-width;
+        content-height: max(self.visible-height, self.body-y + body.preferred-height + self.pad-bottom);
+
+        title := TextInput {
+            x: scroll.column-x;
+            y: scroll.pad-top;
+            width: scroll.column-width;
+            height: 40px * Theme.text-scale;
+            text <=> root.note-title;
+            single-line: true;
+            font-family: Theme.font;
+            font-size: 28px * Theme.text-scale;
+            font-weight: 700;
+            color: Theme.ink;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.ink;
+            edited => {
+                root.title-edited(self.text);
+            }
+            // Enter moves on to the body.
+            accepted => {
+                body.focus();
+            }
+        }
+
+        Text {
+            x: title.x;
+            y: title.y;
+            visible: root.note-title.is-empty;
+            text: "Untitled";
+            color: Theme.muted.with-alpha(0.6);
+            font-family: Theme.font;
+            font-size: 28px * Theme.text-scale;
+            font-weight: 700;
+        }
+
+        body := TextInput {
+            x: scroll.column-x;
+            y: scroll.body-y;
+            width: scroll.column-width;
+            // Fill the visible area so clicking anywhere below the text focuses it.
+            height: max(self.preferred-height, scroll.visible-height - scroll.body-y);
+            text <=> root.note-body;
+            line-height-factor: Theme.line-spacing;
+            single-line: false;
+            wrap: word-wrap;
+            font-family: Theme.font;
+            font-size: root.font-size;
+            color: Theme.ink;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.ink;
+            edited => {
+                root.body-edited(self.text, self.cursor-position-byte-offset);
+            }
+
+            // Keep the cursor in view while typing, and tell Rust where it is (for @ suggestions).
+            cursor-position-changed(cpos) => {
+                scroll.cursor = cpos;
+                root.cursor-moved(self.cursor-position-byte-offset);
+                if (root.typewriter) {
+                    // Typewriter scrolling: the cursor line stays a little above the middle.
+                    scroll.content-y = min(0px, scroll.visible-height * 0.45 - self.y - cpos.y);
+                } else if (self.y + cpos.y + scroll.content-y < 16px) {
+                    scroll.content-y = min(0px, 16px - self.y - cpos.y);
+                } else if (self.y + cpos.y + 48px + scroll.content-y > scroll.visible-height) {
+                    scroll.content-y = scroll.visible-height - self.y - cpos.y - 48px;
+                }
+            }
+        }
+
+        Text {
+            x: body.x;
+            y: body.y;
+            visible: root.note-body.is-empty;
+            text: "Start writing…  or try \u{201c}@remind me to stretch in 20 min\u{201d}";
+            color: Theme.muted;
+            font-family: Theme.font;
+            font-size: root.font-size;
+        }
+
+        // @ command suggestions, just below the cursor (or above it near the bottom of the view).
+        if root.suggestions.length > 0: Rectangle {
+            property <length> below: body.y + scroll.cursor.y + root.font-size * 1.5;
+            x: min(body.x + scroll.cursor.x, scroll.visible-width - self.width - 12px);
+            y: self.below + self.height > scroll.visible-height - scroll.content-y - 8px
+                ? body.y + scroll.cursor.y - self.height - 6px
+                : self.below;
+            width: 280px;
+            height: list.preferred-height;
+            border-radius: 10px;
+            background: Theme.popover;
+            border-width: 1px;
+            border-color: Theme.rule;
+            drop-shadow-blur: 18px;
+            drop-shadow-offset-y: 6px;
+            drop-shadow-color: #00000035;
+
+            list := VerticalLayout {
+                padding: 5px;
+                spacing: 2px;
+
+                for suggestion[i] in root.suggestions: Rectangle {
+                    height: 34px;
+                    border-radius: 7px;
+                    background: i == root.suggestion-index ? Theme.selected : transparent;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 10px;
+
+                        Text {
+                            text: suggestion.name;
+                            color: Theme.accent;
+                            font-size: 13px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: suggestion.hint;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        if i == root.suggestion-index: Text {
+                            text: "Tab";
+                            color: Theme.muted;
+                            font-size: 10.5px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Spotlight: fades towards the top and bottom of the edit pane, leaving the writing line clear.
+    if root.has-note && root.spotlight && root.view-mode != 2: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.edit-width;
+        height: root.height * 0.32;
+        background: @linear-gradient(180deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
+    }
+    if root.has-note && root.spotlight && root.view-mode != 2: Rectangle {
+        x: 0;
+        y: root.height * 0.6;
+        width: root.edit-width;
+        height: root.height * 0.4;
+        background: @linear-gradient(0deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
+    }
+
+    // Split divider
+    if root.has-note && root.view-mode == 1: Rectangle {
+        x: root.edit-width;
+        width: 1px;
+        background: Theme.rule;
+    }
+
+    // Preview pane
+    preview := ScrollView {
+        x: root.edit-width;
+        width: root.width - root.edit-width;
+        visible: root.has-note && root.view-mode != 0;
+
+        property <length> column-width: root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
+
+        VerticalLayout {
+            width: preview.visible-width;
+            padding-top: 36px;
+            padding-bottom: 120px;
+            padding-left: (preview.visible-width - preview.column-width) / 2;
+            padding-right: (preview.visible-width - preview.column-width) / 2;
+            spacing: 0px;
+            alignment: start;
+
+            Text {
+                text: root.note-title.is-empty ? "Untitled" : root.note-title;
+                color: root.note-title.is-empty ? Theme.muted.with-alpha(0.6) : Theme.ink;
+                font-family: Theme.font;
+                font-size: 28px * Theme.text-scale;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                height: 18px;
+            }
+
+            if root.blocks.length == 0: Text {
+                text: "Nothing to preview yet.";
+                color: Theme.muted;
+                font-size: 15px;
+            }
+
+            for block in root.blocks: BlockView {
+                block: block;
+                toggle-task(line) => { root.toggle-task(line); }
+                link-clicked(url) => { root.link-clicked(url); }
+            }
+
+            if root.backlinks.length > 0: VerticalLayout {
+                padding-top: 32px;
+                spacing: 8px;
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.rule;
+                }
+
+                Text {
+                    text: "LINKED FROM";
+                    color: Theme.muted;
+                    font-size: 10.5px;
+                    font-weight: 700;
+                    letter-spacing: 1.1px;
+                }
+
+                for link in root.backlinks: HorizontalLayout {
+                    alignment: start;
+                    Rectangle {
+                        width: link-text.preferred-width + 20px;
+                        height: 28px;
+                        border-radius: 8px;
+                        background: link-touch.has-hover ? Theme.selected : Theme.hover;
+
+                        link-text := Text {
+                            text: "\u{2190}  " + link.title;
+                            color: Theme.accent;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        link-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.open-note(link.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Words (with goal progress), reading time and characters, bottom right of the edit pane.
+    if root.has-note && root.show-status: pill := Rectangle {
+        property <float> progress: root.note-goal > 0 ? Math.min(1, root.note-words / root.note-goal) : 0;
+        x: (root.view-mode == 2 ? root.width : root.edit-width) - self.width - 14px;
+        y: root.height - self.height - 10px;
+        width: status.preferred-width + 16px;
+        height: root.note-goal > 0 ? 28px : 22px;
+        border-radius: 6px;
+        background: Theme.paper.with-alpha(0.85);
+
+        status := Text {
+            y: 0;
+            height: 22px;
+            text: (root.note-goal > 0 ? root.note-words + " / " + root.note-goal + " words" : root.note-words + (root.note-words == 1 ? " word" : " words"))
+                + "  ·  " + Math.max(1, Math.round(root.note-words / 230)) + " min read"
+                + "  ·  " + root.note-body.character-count + " characters";
+            color: Theme.muted;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        // Goal progress bar.
+        if root.note-goal > 0: Rectangle {
+            x: 8px;
+            y: 21px;
+            width: parent.width - 16px;
+            height: 3px;
+            border-radius: 1.5px;
+            background: Theme.selected;
+
+            Rectangle {
+                x: 0;
+                width: parent.width * pill.progress;
+                height: 100%;
+                border-radius: 1.5px;
+                background: pill.progress >= 1 ? #3fb950 : Theme.accent;
+                animate width { duration: 300ms; }
+            }
+        }
+    }
+
+    // Find & replace (Ctrl+F / Ctrl+H), top right of the edit pane.
+    // Always built; hidden and click-through while closed.
+    Rectangle {
+        visible: root.find-open && root.has-note && root.view-mode != 2;
+        x: root.edit-width - self.width - 18px;
+        y: 10px;
+        width: 340px;
+        height: find-layout.preferred-height;
+        border-radius: 10px;
+        background: Theme.popover;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-blur: 18px;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-color: #00000030;
+
+        TouchArea {
+            enabled: parent.visible;
+        }
+
+        find-layout := VerticalLayout {
+            padding: 8px;
+            spacing: 6px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                height: 28px;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: 6px;
+                    background: Theme.hover;
+                    border-width: 1px;
+                    border-color: find-input.has-focus ? Theme.accent.with-alpha(0.5) : transparent;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 6px;
+
+                        find-input := TextInput {
+                            horizontal-stretch: 1;
+                            single-line: true;
+                            vertical-alignment: center;
+                            font-size: 13px;
+                            color: Theme.ink;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.ink;
+                            edited => { root.find-edited(self.text); }
+                            accepted => { root.find-step(1); }
+
+                            Text {
+                                width: 100%;
+                                height: 100%;
+                                visible: find-input.text.is-empty;
+                                text: "Find";
+                                color: Theme.muted;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Text {
+                            text: root.find-status;
+                            color: root.find-status == "No results" ? Theme.danger : Theme.muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                FindButton { icon: Icons.chevron-up; clicked => { root.find-step(-1); } }
+                FindButton { icon: Icons.chevron-down; clicked => { root.find-step(1); } }
+                FindButton { icon: Icons.replace; active: root.find-replace; clicked => { root.find-replace = !root.find-replace; } }
+                FindButton {
+                    icon: Icons.close;
+                    clicked => {
+                        root.find-open = false;
+                        root.find-closed();
+                    }
+                }
+            }
+
+            if root.find-replace: HorizontalLayout {
+                spacing: 6px;
+                height: 28px;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: 6px;
+                    background: Theme.hover;
+                    border-width: 1px;
+                    border-color: replace-input.has-focus ? Theme.accent.with-alpha(0.5) : transparent;
+
+                    replace-input := TextInput {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        single-line: true;
+                        vertical-alignment: center;
+                        font-size: 13px;
+                        color: Theme.ink;
+                        selection-background-color: Theme.selection;
+                        selection-foreground-color: Theme.ink;
+                        accepted => { root.replace-one(self.text); }
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            visible: replace-input.text.is-empty;
+                            text: "Replace";
+                            color: Theme.muted;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                TextButton { label: "Replace"; clicked => { root.replace-one(replace-input.text); } }
+                TextButton { label: "All"; clicked => { root.replace-all(replace-input.text); } }
+            }
+        }
+    }
+
+    // Shown when every note is closed.
+    if !root.has-note: VerticalLayout {
+        alignment: center;
+        spacing: 14px;
+
+        Text {
+            text: "No note open";
+            color: Theme.muted;
+            font-size: 15px;
+            horizontal-alignment: center;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 150px;
+                height: 34px;
+                border-radius: 8px;
+                background: new-touch.has-hover ? Theme.selected : Theme.hover;
+                animate background { duration: 120ms; }
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Icon {
+                            width: 13px;
+                            height: 13px;
+                            commands: Icons.plus;
+                            stroke: Theme.ink-soft;
+                        }
+                    }
+
+                    Text {
+                        text: "New note";
+                        color: Theme.ink-soft;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "Ctrl+N";
+                        color: Theme.muted;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                new-touch := TouchArea {
+                    clicked => {
+                        root.new-note();
+                    }
+                }
+            }
+        }
+    }
+}

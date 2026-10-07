@@ -1,0 +1,26 @@
+# Build output
+/target
+
+# Local planning notes
+/_docs
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Leftovers from atomic saves
+*.tmp
+
+# Notes for AI coding agents (local only)
+AGENTS.md
+
+# Logs and local secrets
+*.log
+.env
+.env.*

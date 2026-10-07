@@ -1,0 +1,88 @@
+import { Theme } from "theme.slint";
+import { BlockView, MdBlock } from "markdown.slint";
+
+// Full-screen slides: the note split on `---` lines (or at its headings).
+export component Presentation inherits Rectangle {
+    in property <[MdBlock]> blocks;
+    in property <int> number;
+    in property <int> count;
+    callback step(int);
+    callback stop();
+    callback link-clicked(string);
+
+    background: Theme.backdrop;
+
+    // Click the left third to go back, anywhere else to go forward.
+    TouchArea {
+        clicked => { root.step(self.mouse-x < root.width / 3 ? -1 : 1); }
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.stop();
+                return accept;
+            }
+            if (event.text == Key.RightArrow || event.text == Key.DownArrow || event.text == Key.PageDown || event.text == " " || event.text == Key.Return) {
+                root.step(1);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow || event.text == Key.UpArrow || event.text == Key.PageUp || event.text == Key.Backspace) {
+                root.step(-1);
+                return accept;
+            }
+            if (event.text == Key.Home) {
+                root.step(-1000);
+                return accept;
+            }
+            if (event.text == Key.End) {
+                root.step(1000);
+                return accept;
+            }
+            return accept;
+        }
+    }
+
+    init => { keys.focus(); }
+
+    VerticalLayout {
+        alignment: center;
+        padding-left: max(48px, (root.width - 1000px) / 2);
+        padding-right: max(48px, (root.width - 1000px) / 2);
+        padding-top: 48px;
+        padding-bottom: 64px;
+
+        for block in root.blocks: BlockView {
+            block: block;
+            link-clicked(url) => { root.link-clicked(url); }
+        }
+    }
+
+    // Progress along the bottom, and the slide number.
+    Rectangle {
+        x: 0;
+        y: root.height - 3px;
+        height: 3px;
+        width: root.count > 0 ? root.width * root.number / root.count : 0;
+        background: Theme.accent;
+        animate width { duration: 200ms; easing: ease-out; }
+    }
+
+    Text {
+        x: root.width - self.width - 24px;
+        y: root.height - self.height - 16px;
+        text: root.number + " / " + root.count;
+        color: Theme.muted;
+        font-size: 13px;
+    }
+
+    Text {
+        x: 24px;
+        y: root.height - self.height - 16px;
+        text: "← → to move · Esc to leave";
+        color: Theme.muted.with-alpha(0.7);
+        font-size: 12px;
+        opacity: root.number <= 1 ? 1 : 0;
+        animate opacity { duration: 300ms; }
+    }
+}

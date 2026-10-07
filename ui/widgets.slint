@@ -1,0 +1,314 @@
+import { Theme } from "theme.slint";
+
+// SVG path data, all drawn in a 12x12 viewbox.
+export global Icons {
+    out property <string> keyboard: "M 1.2 3 L 10.8 3 L 10.8 9 L 1.2 9 Z M 3 5 L 3.05 5 M 5 5 L 5.05 5 M 7 5 L 7.05 5 M 9 5 L 9.05 5 M 3.8 7.2 L 8.2 7.2";
+    out property <string> plus: "M 6 2.5 L 6 9.5 M 2.5 6 L 9.5 6";
+    out property <string> close: "M 3.5 3.5 L 8.5 8.5 M 8.5 3.5 L 3.5 8.5";
+    out property <string> star: "M 6 1.4 L 7.4 4.3 L 10.6 4.75 L 8.3 7 L 8.85 10.2 L 6 8.7 L 3.15 10.2 L 3.7 7 L 1.4 4.75 L 4.6 4.3 Z";
+    out property <string> trash: "M 2.3 3.4 L 9.7 3.4 M 4.7 3.4 L 4.7 2 L 7.3 2 L 7.3 3.4 M 3.4 3.4 L 3.9 10.2 L 8.1 10.2 L 8.6 3.4";
+    out property <string> restore: "M 2.4 6 A 3.6 3.6 0 1 0 3.5 3.4 M 3.5 1.2 L 3.5 3.4 L 5.7 3.4";
+    out property <string> sidebar: "M 1.6 2.4 L 10.4 2.4 L 10.4 9.6 L 1.6 9.6 Z M 4.6 2.4 L 4.6 9.6";
+    out property <string> search: "M 8 8 L 10.6 10.6 M 8.8 5.2 A 3.6 3.6 0 1 1 1.6 5.2 A 3.6 3.6 0 1 1 8.8 5.2";
+    out property <string> chevron-right: "M 4.6 2.8 L 7.8 6 L 4.6 9.2";
+    out property <string> chevron-down: "M 2.8 4.6 L 6 7.8 L 9.2 4.6";
+    out property <string> chevron-left: "M 7.4 2.8 L 4.2 6 L 7.4 9.2";
+    out property <string> chevron-up: "M 2.8 7.4 L 6 4.2 L 9.2 7.4";
+    out property <string> replace: "M 2 4 L 8.5 4 M 6.5 2 L 8.5 4 L 6.5 6 M 10 8 L 3.5 8 M 5.5 6 L 3.5 8 L 5.5 10";
+    out property <string> timer: "M 6 11 A 4.4 4.4 0 1 1 6.01 11 Z M 6 4 L 6 6.8 L 7.8 7.8 M 4.6 1.2 L 7.4 1.2";
+    out property <string> stop: "M 3.5 3.5 L 8.5 3.5 L 8.5 8.5 L 3.5 8.5 Z";
+    out property <string> bell: "M 2.6 8.8 L 3.2 8 L 3.2 5.4 A 2.8 2.8 0 0 1 8.8 5.4 L 8.8 8 L 9.4 8.8 Z M 5 10.4 L 7 10.4";
+    out property <string> alert: "M 6 1.6 L 10.8 10 L 1.2 10 Z M 6 4.6 L 6 6.8 M 6 8.4 L 6 8.5";
+    out property <string> settings: "M 1.8 3.6 L 3.4 3.6 M 6.2 3.6 L 10.2 3.6 M 6.2 3.6 A 1.4 1.4 0 1 1 3.4 3.6 A 1.4 1.4 0 1 1 6.2 3.6 M 1.8 8.4 L 5.8 8.4 M 8.6 8.4 L 10.2 8.4 M 8.6 8.4 A 1.4 1.4 0 1 1 5.8 8.4 A 1.4 1.4 0 1 1 8.6 8.4";
+    out property <string> edit: "M 2.4 9.6 L 2.7 7.6 L 7.7 2.6 L 9.4 4.3 L 4.4 9.3 Z M 6.8 3.5 L 8.5 5.2";
+    out property <string> split: "M 1.6 2.4 L 10.4 2.4 L 10.4 9.6 L 1.6 9.6 Z M 6 2.4 L 6 9.6";
+    out property <string> eye: "M 1.2 6 Q 6 1.4 10.8 6 Q 6 10.6 1.2 6 Z M 7.4 6 A 1.4 1.4 0 1 1 4.6 6 A 1.4 1.4 0 1 1 7.4 6";
+    out property <string> type: "M 2.2 3.2 L 2.2 2.2 L 9.8 2.2 L 9.8 3.2 M 6 2.2 L 6 9.8 M 4.4 9.8 L 7.6 9.8";
+    out property <string> bullets: "M 4.6 3 L 10.4 3 M 4.6 6 L 10.4 6 M 4.6 9 L 10.4 9 M 1.9 3 L 1.95 3 M 1.9 6 L 1.95 6 M 1.9 9 L 1.95 9";
+    out property <string> numbers: "M 4.8 3 L 10.4 3 M 4.8 6 L 10.4 6 M 4.8 9 L 10.4 9 M 1.6 2.2 L 2.4 1.8 L 2.4 4.2";
+    out property <string> task: "M 1.6 1.6 L 10.4 1.6 L 10.4 10.4 L 1.6 10.4 Z M 3.6 6.1 L 5.3 7.8 L 8.5 4.3";
+    out property <string> quote: "M 2.4 2.4 L 2.4 9.6 M 4.8 4 L 10 4 M 4.8 6 L 10 6 M 4.8 8 L 8.4 8";
+    out property <string> code: "M 4.2 3.2 L 1.6 6 L 4.2 8.8 M 7.8 3.2 L 10.4 6 L 7.8 8.8";
+    out property <string> check: "M 3 6.2 L 5 8.2 L 9 3.8";
+    out property <string> folder: "M 1.4 3 L 4.6 3 L 5.6 4.2 L 10.6 4.2 L 10.6 9.6 L 1.4 9.6 Z";
+    out property <string> export: "M 6 1.6 L 6 7.6 M 3.6 4 L 6 1.6 L 8.4 4 M 2 7.4 L 2 10.2 L 10 10.2 L 10 7.4";
+    out property <string> import: "M 6 1.6 L 6 7.6 M 3.6 5.2 L 6 7.6 L 8.4 5.2 M 2 7.4 L 2 10.2 L 10 10.2 L 10 7.4";
+}
+
+export component Icon inherits Path {
+    viewbox-width: 12;
+    viewbox-height: 12;
+    width: 14px;
+    height: 14px;
+    fill: transparent;
+    stroke-width: 1.3px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+}
+
+export component IconButton {
+    in property <string> icon;
+    in property <bool> filled;
+    in property <color> color: Theme.muted;
+    in property <color> hover-color: Theme.ink;
+    in property <length> size: 26px;
+    in property <length> icon-size: 14px;
+    // Shown pressed, e.g. while its popover or toolbar is open.
+    in property <bool> active;
+    // What screen readers announce.
+    in property <string> description;
+    out property <bool> has-hover: touch.has-hover;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.description;
+    accessible-action-default => { root.clicked(); }
+
+    width: root.size;
+    height: root.size;
+
+    property <color> tint: touch.has-hover || root.active ? root.hover-color : root.color;
+
+    Rectangle {
+        border-radius: 6px;
+        background: touch.pressed || root.active ? Theme.selected : touch.has-hover ? Theme.hover : transparent;
+        animate background { duration: 120ms; }
+    }
+
+    Icon {
+        width: root.icon-size;
+        height: root.icon-size;
+        commands: root.icon;
+        stroke: root.tint;
+        fill: root.filled ? root.tint : transparent;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One macOS-style "traffic light" window button.
+export component TrafficLight {
+    in property <color> base;
+    in property <color> glyph-color;
+    // SVG path data, drawn in a 12x12 viewbox.
+    in property <string> icon;
+    in property <bool> filled;
+    in property <bool> show-glyph;
+    // What screen readers announce.
+    in property <string> description;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.description;
+    accessible-action-default => { root.clicked(); }
+
+    width: 12px;
+    height: 12px;
+
+    Rectangle {
+        border-radius: self.width / 2;
+        background: touch.pressed ? root.base.darker(0.25) : root.base;
+        border-width: 0.5px;
+        border-color: root.base.darker(0.3);
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        commands: root.icon;
+        visible: root.show-glyph;
+        fill: root.filled ? root.glyph-color : transparent;
+        stroke: root.filled ? transparent : root.glyph-color;
+        stroke-width: 1.3px;
+        stroke-line-cap: round;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Invisible strip along a window edge that starts a native resize.
+export component ResizeEdge inherits TouchArea {
+    in property <string> direction;
+    callback resize(string);
+
+    pointer-event(ev) => {
+        if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+            root.resize(root.direction);
+        }
+    }
+}
+
+// Starts a native window drag on left-press (double-click maximizes; handled in Rust).
+export component DragArea inherits TouchArea {
+    callback drag();
+
+    pointer-event(ev) => {
+        if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.left) {
+            root.drag();
+        }
+    }
+}
+
+// A pill-shaped on/off switch.
+export component Toggle {
+    in-out property <bool> checked;
+    in property <string> description;
+    callback toggled(bool);
+
+    accessible-role: switch;
+    accessible-label: root.description;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+
+    width: 32px;
+    height: 18px;
+
+    Rectangle {
+        border-radius: self.height / 2;
+        background: root.checked ? Theme.accent : Theme.selected;
+        animate background { duration: 150ms; }
+
+        Rectangle {
+            x: root.checked ? parent.width - self.width - 2px : 2px;
+            animate x { duration: 150ms; easing: ease-out; }
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            background: root.checked ? Theme.on-accent : Theme.paper;
+            drop-shadow-blur: 2px;
+            drop-shadow-color: #00000030;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+// A minimal slider; `changed` fires while dragging.
+export component Slider {
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in-out property <float> value;
+    in property <string> description;
+    callback changed(float);
+
+    accessible-role: slider;
+    accessible-label: root.description;
+    accessible-value: Math.round(root.fraction * 100) + "%";
+    accessible-value-minimum: root.minimum;
+    accessible-value-maximum: root.maximum;
+
+    height: 20px;
+
+    property <float> fraction: (root.value - root.minimum) / (root.maximum - root.minimum);
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.selected;
+    }
+
+    // Filled part, from the left edge to the knob's centre. Needs an explicit x: Slint centres
+    // elements without one, which pulled the fill away from the knob as the value changed.
+    Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: root.fraction * (root.width - 14px) + 7px;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+
+    Rectangle {
+        x: root.fraction * (root.width - self.width);
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Theme.paper;
+        border-width: 2px;
+        border-color: Theme.accent;
+    }
+
+    touch := TouchArea {
+        function set-from(x: length) {
+            root.value = root.minimum + max(0, min(1, (x - 7px) / (root.width - 14px))) * (root.maximum - root.minimum);
+            root.changed(root.value);
+        }
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                self.set-from(self.mouse-x);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                self.set-from(self.mouse-x);
+            }
+        }
+    }
+}
+
+// A formatting toolbar button showing either an icon or a short label.
+export component FormatButton {
+    in property <string> icon;
+    in property <string> label;
+    in property <int> label-weight: 600;
+    in property <bool> label-italic;
+    in property <string> tooltip;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.tooltip != "" ? root.tooltip : root.label;
+    accessible-action-default => { root.clicked(); }
+
+    width: 30px;
+    height: 28px;
+
+    Rectangle {
+        border-radius: 6px;
+        background: touch.pressed ? Theme.selected : touch.has-hover ? Theme.hover : transparent;
+        animate background { duration: 120ms; }
+    }
+
+    if root.icon != "": Icon {
+        width: 14px;
+        height: 14px;
+        commands: root.icon;
+        stroke: touch.has-hover ? Theme.ink : Theme.ink-soft;
+    }
+
+    if root.label != "": Text {
+        text: root.label;
+        color: touch.has-hover ? Theme.ink : Theme.ink-soft;
+        font-size: 14px;
+        font-weight: root.label-weight;
+        font-italic: root.label-italic;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}

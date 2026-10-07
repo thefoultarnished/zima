@@ -1,0 +1,126 @@
+import { Theme } from "theme.slint";
+import { IconButton, Icons } from "widgets.slint";
+
+export struct CalendarDay {
+    day: int,
+    in-month: bool,
+    today: bool,
+    has-note: bool,
+    has-reminder: bool,
+    // YYYY-MM-DD
+    date: string,
+}
+
+// Month view: daily notes and reminders; click a day to open its daily note.
+export component CalendarPopover {
+    in property <string> title;
+    in property <[CalendarDay]> days;
+    callback shift(int);
+    callback pick(string);
+
+    width: 300px;
+    height: layout.preferred-height;
+
+    TouchArea { }
+
+    Rectangle {
+        border-radius: 12px;
+        background: Theme.popover;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: #00000040;
+    }
+
+    layout := VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            height: 28px;
+            IconButton {
+                description: "Previous month";
+                icon: Icons.chevron-left;
+                clicked => { root.shift(-1); }
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: root.title;
+                color: Theme.ink;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            IconButton {
+                description: "Next month";
+                icon: Icons.chevron-right;
+                clicked => { root.shift(1); }
+            }
+        }
+
+        HorizontalLayout {
+            for name in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]: Text {
+                horizontal-stretch: 1;
+                text: name;
+                color: Theme.muted;
+                font-size: 10.5px;
+                font-weight: 600;
+                horizontal-alignment: center;
+            }
+        }
+
+        for week in 6: HorizontalLayout {
+            spacing: 2px;
+            for weekday in 7: cell := Rectangle {
+                property <CalendarDay> d: root.days[week * 7 + weekday];
+                horizontal-stretch: 1;
+                height: 34px;
+                border-radius: 8px;
+                background: self.d.today ? Theme.accent : day-touch.has-hover ? Theme.hover : transparent;
+
+                day-touch := TouchArea {
+                    clicked => { root.pick(cell.d.date); }
+                }
+
+                Text {
+                    y: 6px;
+                    width: parent.width;
+                    text: cell.d.day;
+                    color: cell.d.today ? Theme.on-accent : cell.d.in-month ? Theme.ink : Theme.muted.with-alpha(0.5);
+                    font-size: 12.5px;
+                    font-weight: cell.d.today ? 700 : 400;
+                    horizontal-alignment: center;
+                }
+
+                // Dots: daily note (accent) and reminder (blue).
+                HorizontalLayout {
+                    y: parent.height - 9px;
+                    height: 4px;
+                    alignment: center;
+                    spacing: 3px;
+                    if cell.d.has-note: Rectangle {
+                        width: 4px;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: cell.d.today ? Theme.on-accent : Theme.accent;
+                    }
+                    if cell.d.has-reminder: Rectangle {
+                        width: 4px;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: cell.d.today ? Theme.on-accent : #3d8bfd;
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "Click a day to open its daily note";
+            color: Theme.muted;
+            font-size: 10.5px;
+            horizontal-alignment: center;
+        }
+    }
+}

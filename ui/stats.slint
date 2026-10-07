@@ -1,0 +1,143 @@
+import { Theme } from "theme.slint";
+import { IconButton, Icons } from "widgets.slint";
+
+export struct StatCell {
+    // 0 = nothing written … 4 = a lot.
+    level: int,
+    // e.g. "Wed 7 Oct: 412 words"
+    label: string,
+}
+
+export struct StatSummary {
+    today: int,
+    week: int,
+    streak: int,
+    best: int,
+    notes: int,
+    words: int,
+    // Focus-timer minutes.
+    focus-today: int,
+    focus-week: int,
+}
+
+// Writing stats: words written per day and a streak heatmap.
+export component StatsPopover {
+    in property <StatSummary> summary;
+    // Weeks × 7 days, oldest first, Monday first within a week.
+    in property <[StatCell]> cells;
+    in property <int> weeks: 18;
+    callback close();
+
+    property <string> hovered;
+
+    width: 560px;
+    height: layout.preferred-height;
+
+    TouchArea { }
+
+    Rectangle {
+        border-radius: 14px;
+        background: Theme.popover;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-blur: 32px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: #00000050;
+    }
+
+    layout := VerticalLayout {
+        padding: 18px;
+        spacing: 14px;
+
+        HorizontalLayout {
+            Text {
+                horizontal-stretch: 1;
+                text: "Writing stats";
+                color: Theme.ink;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            IconButton {
+                description: "Close";
+                icon: Icons.close;
+                clicked => { root.close(); }
+            }
+        }
+
+        // Big numbers.
+        HorizontalLayout {
+            spacing: 10px;
+            for stat in [
+                { value: root.summary.today, label: "words today" },
+                { value: root.summary.week, label: "this week" },
+                { value: root.summary.streak, label: root.summary.streak == 1 ? "day streak" : "days streak" },
+                { value: root.summary.best, label: "best day" },
+            ]: Rectangle {
+                horizontal-stretch: 1;
+                height: 64px;
+                border-radius: 10px;
+                background: Theme.hover;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: stat.value;
+                        color: Theme.ink;
+                        font-size: 22px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: stat.label;
+                        color: Theme.muted;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Heatmap: columns are weeks, rows are days.
+        HorizontalLayout {
+            spacing: 3px;
+            alignment: center;
+            for week in root.weeks: VerticalLayout {
+                spacing: 3px;
+                for day in 7: Rectangle {
+                    property <StatCell> cell: root.cells[week * 7 + day];
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: self.cell.level == 0 ? Theme.hover
+                        : Theme.accent.with-alpha(0.2 + self.cell.level * 0.2);
+                    border-width: cell-touch.has-hover ? 1px : 0;
+                    border-color: Theme.ink-soft;
+
+                    cell-touch := TouchArea {
+                        changed has-hover => {
+                            if (self.has-hover) {
+                                root.hovered = parent.cell.label;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "Focus timer: " + root.summary.focus-today + " min today  ·  " + root.summary.focus-week + " min this week";
+            color: Theme.ink-soft;
+            font-size: 12px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.hovered != "" ? root.hovered : root.summary.notes + " notes  ·  " + root.summary.words + " words in total";
+            color: Theme.muted;
+            font-size: 11.5px;
+            horizontal-alignment: center;
+        }
+    }
+}

@@ -1,0 +1,965 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { DragArea, Icon, IconButton, Icons } from "widgets.slint";
+
+export struct NoteRow {
+    id: string,
+    title: string,
+    meta: string,
+    favorite: bool,
+    current: bool,
+    // Doesn't match the search (only used in the Active section, which never filters).
+    dim: bool,
+    pinned: bool,
+    // Index into Theme.note-colors; -1 = none.
+    color: int,
+    // Checklist progress like "3/5"; empty if the note has no checkboxes.
+    progress: string,
+    // The matching line when searching inside the body.
+    snippet: string,
+}
+
+export struct TagRow {
+    name: string,
+    count: int,
+}
+
+component SectionHeader {
+    in property <string> label;
+    in property <int> count;
+    in property <bool> open;
+    // Optional small action on the right, e.g. "Empty" for the Bin.
+    in property <string> action;
+    callback toggled();
+    callback action-clicked();
+
+    height: 30px;
+
+    // The action's own TouchArea takes the hover from the header's, so combine both;
+    // otherwise the button disappears as soon as the mouse reaches it.
+    property <bool> show-action: root.action != "" && (touch.has-hover || action-touch.has-hover);
+
+    touch := TouchArea {
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 6px;
+        spacing: 6px;
+
+        Text {
+            text: root.label;
+            color: touch.has-hover || action-touch.has-hover ? Theme.ink-soft : Theme.muted;
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            vertical-alignment: center;
+        }
+
+        // The action sits at the right end of the spacer, so it's always built (letting
+        // `show-action` see its hover) without taking layout space while hidden.
+        Rectangle {
+            horizontal-stretch: 1;
+
+            Rectangle {
+                visible: root.show-action;
+                width: action-text.preferred-width + 12px;
+                height: 18px;
+                x: parent.width - self.width;
+                y: (parent.height - self.height) / 2;
+                border-radius: 5px;
+                background: action-touch.has-hover ? Theme.danger.with-alpha(0.15) : Theme.hover;
+
+                action-text := Text {
+                    text: root.action;
+                    color: action-touch.has-hover ? Theme.danger : Theme.ink-soft;
+                    font-size: 10.5px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                action-touch := TouchArea {
+                    clicked => { root.action-clicked(); }
+                }
+            }
+        }
+
+        Text {
+            text: root.count;
+            color: Theme.muted;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                width: 10px;
+                height: 10px;
+                commands: root.open ? Icons.chevron-down : Icons.chevron-right;
+                stroke: Theme.muted;
+            }
+        }
+    }
+}
+
+component NoteRowItem {
+    in property <NoteRow> note;
+    // "note": star + move to bin; "active": star + close; "bin": restore + delete forever.
+    in property <string> kind: "note";
+    callback open();
+    callback favorite();
+    callback remove();
+    callback restore();
+    callback pin();
+    callback archive();
+    callback duplicate();
+    callback sticky();
+    callback set-color(int);
+    callback move-to-notebook();
+
+    // The row counts as hovered while the pointer is on it or on one of its buttons.
+    property <bool> favorite-hover;
+    property <bool> hovered: touch.has-hover || root.favorite-hover || remove-button.has-hover;
+
+    height: root.note.snippet != "" ? 48px : 32px;
+    opacity: root.note.dim ? 0.3 : 1;
+    accessible-role: list-item;
+    accessible-label: root.note.title + (root.note.pinned ? ", pinned" : "") + (root.note.favorite ? ", favourite" : "")
+        + (root.note.progress != "" ? ", " + root.note.progress + " done" : "") + ", " + root.note.meta;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.note.current;
+    accessible-action-default => { root.open(); }
+    animate opacity { duration: 200ms; }
+
+    menu := ContextMenuArea {
+        Menu {
+            if root.kind != "bin": MenuItem {
+                title: root.note.pinned ? "Unpin" : "Pin to top";
+                activated => { root.pin(); }
+            }
+            if root.kind != "bin": MenuItem {
+                title: root.note.favorite ? "Remove from Favorites" : "Add to Favorites";
+                activated => { root.favorite(); }
+            }
+            if root.kind != "bin": Menu {
+                title: "Colour";
+                MenuItem { title: "None"; activated => { root.set-color(-1); } }
+                MenuItem { title: "Red"; activated => { root.set-color(0); } }
+                MenuItem { title: "Orange"; activated => { root.set-color(1); } }
+                MenuItem { title: "Yellow"; activated => { root.set-color(2); } }
+                MenuItem { title: "Green"; activated => { root.set-color(3); } }
+                MenuItem { title: "Teal"; activated => { root.set-color(4); } }
+                MenuItem { title: "Blue"; activated => { root.set-color(5); } }
+                MenuItem { title: "Purple"; activated => { root.set-color(6); } }
+            }
+            if root.kind != "bin": MenuSeparator { }
+            if root.kind != "bin": MenuItem {
+                title: "Duplicate";
+                activated => { root.duplicate(); }
+            }
+            if root.kind != "bin": MenuItem {
+                title: "Pop out as sticky note";
+                activated => { root.sticky(); }
+            }
+            if root.kind != "bin": MenuItem {
+                title: "Move to notebook\u{2026}";
+                activated => { root.move-to-notebook(); }
+            }
+            if root.kind != "bin": MenuItem {
+                title: root.kind == "archive" ? "Unarchive" : "Archive";
+                activated => { root.archive(); }
+            }
+            if root.kind == "active": MenuItem {
+                title: "Close";
+                activated => { root.remove(); }
+            }
+            if root.kind != "bin" && root.kind != "active": MenuItem {
+                title: "Move to Bin";
+                activated => { root.remove(); }
+            }
+            if root.kind == "bin": MenuItem {
+                title: "Restore";
+                activated => { root.restore(); }
+            }
+            if root.kind == "bin": MenuItem {
+                title: "Delete forever";
+                activated => { root.remove(); }
+            }
+        }
+
+        touch := TouchArea {
+            clicked => {
+                if (root.kind != "bin") {
+                    root.open();
+                }
+            }
+            // This area takes the right-click too, so open the menu from here.
+            pointer-event(ev) => {
+                if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.up) {
+                    menu.show({ x: self.mouse-x, y: self.mouse-y });
+                }
+            }
+        }
+
+        Rectangle {
+            border-radius: 7px;
+            background: root.note.current ? Theme.selected : root.hovered ? Theme.hover : transparent;
+            animate background { duration: 120ms; }
+        }
+
+        // Accent bar on the open note, so it stands out even when the theme's highlight is faint.
+        Rectangle {
+            visible: root.note.current;
+            x: 0;
+            width: 3px;
+            height: min(16px, parent.height - 16px);
+            border-radius: 1.5px;
+            background: Theme.accent;
+        }
+
+        // Same left and right edges as the section headers, so titles, counts and times line up.
+        // (Right is 6px short: the collapsed hover buttons still add one gap.)
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 4px;
+            spacing: 6px;
+
+            if root.note.color >= 0: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: Theme.note-colors[root.note.color];
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 1px;
+
+                Text {
+                    text: root.note.title;
+                    overflow: elide;
+                    color: root.note.current ? Theme.ink : Theme.ink-soft;
+                    font-size: 13px;
+                    font-weight: root.note.current ? 600 : 400;
+                }
+
+                if root.note.snippet != "": Text {
+                    text: root.note.snippet;
+                    overflow: elide;
+                    color: Theme.muted;
+                    font-size: 11px;
+                }
+            }
+
+            if !root.hovered: HorizontalLayout {
+                horizontal-stretch: 0;
+                spacing: 6px;
+
+                if root.note.progress != "": Text {
+                    text: root.note.progress;
+                    color: Theme.accent;
+                    font-size: 10.5px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.note.meta;
+                    color: Theme.muted;
+                    font-size: 11px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+
+                // Always takes space, so times line up whether or not a note is starred. Same width
+                // as a header's chevron, so times also line up with the section counts.
+                VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        visible: root.note.favorite;
+                        width: 10px;
+                        height: 10px;
+                        commands: Icons.star;
+                        stroke: Theme.accent;
+                        fill: Theme.accent;
+                    }
+                }
+            }
+
+            // Always built (just collapsed), so hovering a button doesn't remove it.
+            VerticalLayout {
+                alignment: center;
+                width: root.hovered ? buttons.preferred-width : 0px;
+                visible: root.hovered;
+
+                buttons := HorizontalLayout {
+                    spacing: 2px;
+
+                    if root.kind != "bin": favorite-button := IconButton {
+                        size: 24px;
+                        icon-size: 13px;
+                        description: "Favourite";
+                        icon: Icons.star;
+                        filled: root.note.favorite;
+                        color: root.note.favorite ? Theme.accent : Theme.muted;
+                        hover-color: Theme.accent;
+                        changed has-hover => { root.favorite-hover = self.has-hover; }
+                        clicked => {
+                            root.favorite();
+                        }
+                    }
+
+                    if root.kind == "bin": restore-button := IconButton {
+                        size: 24px;
+                        icon-size: 13px;
+                        description: "Restore";
+                        icon: Icons.restore;
+                        changed has-hover => { root.favorite-hover = self.has-hover; }
+                        clicked => {
+                            root.restore();
+                        }
+                    }
+
+                    remove-button := IconButton {
+                        size: 24px;
+                        icon-size: 13px;
+                        description: root.kind == "active" ? "Close note" : "Delete note";
+                        icon: root.kind == "active" ? Icons.close : Icons.trash;
+                        hover-color: root.kind == "active" ? Theme.ink : Theme.danger;
+                        clicked => {
+                            root.remove();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <[NoteRow]> active-notes;
+    in property <[NoteRow]> pinned-notes;
+    in property <[NoteRow]> favorite-notes;
+    in property <[NoteRow]> recent-notes;
+    in property <[NoteRow]> all-notes;
+    in property <[NoteRow]> archived-notes;
+    in property <[NoteRow]> bin-notes;
+    in property <[TagRow]> tags;
+    in property <bool> show-active;
+    in property <bool> show-pinned;
+    in property <bool> show-favorites;
+    in property <bool> show-recent;
+    in property <bool> show-all;
+    in property <bool> show-tags;
+    in property <bool> show-archive;
+    in property <bool> show-bin;
+    in property <int> note-count;
+    in property <int> word-count;
+    in property <length> top-bar-height: 44px;
+    in-out property <string> search-text;
+
+    callback drag-window();
+    callback new-note();
+    callback open-note(string);
+    callback close-note(string);
+    callback delete-note(string);
+    callback restore-note(string);
+    callback purge-note(string);
+    callback toggle-favorite(string);
+    callback toggle-pin(string);
+    callback toggle-archive(string);
+    callback duplicate-note(string);
+    callback open-sticky(string);
+    callback set-color(string, int);
+    callback toggle-section(string);
+    callback search-edited(string);
+    callback open-tag(string);
+    callback empty-bin();
+    callback open-stats();
+    callback open-tasks();
+    in property <int> open-task-count;
+    in property <[string]> saved-searches;
+    in property <bool> search-saved;
+    in property <[TagRow]> notebooks;
+    in property <int> on-this-day-count;
+    in property <bool> show-saved: true;
+    in property <bool> show-notebooks: true;
+    callback save-search();
+    callback remove-saved-search(string);
+    callback apply-search(string);
+    callback open-on-this-day();
+    callback move-to-notebook(string);
+
+    background: Theme.sidebar.with-alpha(Theme.surface-alpha);
+
+    VerticalLayout {
+        // Top strip lines up with the main title bar and drags the window.
+        Rectangle {
+            height: root.top-bar-height;
+
+            DragArea {
+                drag => {
+                    root.drag-window();
+                }
+            }
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 10px;
+                spacing: 8px;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                }
+
+                Text {
+                    text: "Zima";
+                    color: Theme.ink-soft;
+                    font-size: 13px;
+                    font-weight: 600;
+                    letter-spacing: 0.4px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        description: "New note";
+                        icon: Icons.plus;
+                        clicked => {
+                            root.new-note();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search ("#tag" searches by tag)
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 6px;
+            padding-bottom: 6px;
+
+            Rectangle {
+                height: 30px;
+                border-radius: 8px;
+                background: Theme.hover;
+                border-width: 1px;
+                border-color: search.has-focus ? Theme.accent.with-alpha(0.45) : transparent;
+                animate border-color { duration: 150ms; }
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 4px;
+                    spacing: 7px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Icon {
+                            width: 13px;
+                            height: 13px;
+                            commands: Icons.search;
+                            stroke: Theme.muted;
+                        }
+                    }
+
+                    search := TextInput {
+                        text <=> root.search-text;
+                        single-line: true;
+                        vertical-alignment: center;
+                        font-size: 13px;
+                        color: Theme.ink;
+                        selection-background-color: Theme.selection;
+                        selection-foreground-color: Theme.ink;
+                        edited => {
+                            root.search-edited(self.text);
+                        }
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            visible: search.text.is-empty;
+                            text: "Search   (Ctrl+K for everything)";
+                            color: Theme.muted;
+                            font-size: 12.5px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Save this search (it appears under SAVED).
+                    if !search.text.is-empty && !root.search-saved: VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            size: 22px;
+                            icon-size: 12px;
+                            description: "Save this search";
+                            icon: Icons.star;
+                            clicked => { root.save-search(); }
+                        }
+                    }
+                    if !search.text.is-empty: VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            size: 22px;
+                            icon-size: 11px;
+                            description: "Clear search";
+                            icon: Icons.close;
+                            clicked => {
+                                root.search-text = "";
+                                root.search-edited("");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Tasks entry.
+        Rectangle {
+            height: 32px;
+            tasks-touch := TouchArea {
+                clicked => { root.open-tasks(); }
+            }
+            Rectangle {
+                x: 6px;
+                width: parent.width - 12px;
+                border-radius: 7px;
+                background: tasks-touch.has-hover ? Theme.hover : transparent;
+            }
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 32px;
+                spacing: 9px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        width: 13px;
+                        height: 13px;
+                        commands: Icons.task;
+                        stroke: Theme.ink-soft;
+                    }
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Tasks";
+                    color: Theme.ink-soft;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                if root.open-task-count > 0: Text {
+                    text: root.open-task-count;
+                    color: Theme.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // On this day.
+        if root.on-this-day-count > 0: Rectangle {
+            height: 32px;
+            otd-touch := TouchArea {
+                clicked => { root.open-on-this-day(); }
+            }
+            Rectangle {
+                x: 6px;
+                width: parent.width - 12px;
+                border-radius: 7px;
+                background: otd-touch.has-hover ? Theme.hover : transparent;
+            }
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 32px;
+                spacing: 9px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        width: 13px;
+                        height: 13px;
+                        commands: Icons.restore;
+                        stroke: Theme.ink-soft;
+                    }
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: "On this day";
+                    color: Theme.ink-soft;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.on-this-day-count;
+                    color: Theme.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        list := ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                width: list.visible-width;
+                padding-left: 6px;
+                padding-right: 6px;
+                padding-bottom: 12px;
+                spacing: 1px;
+                alignment: start;
+
+                if root.active-notes.length > 0: SectionHeader {
+                    label: "ACTIVE";
+                    count: root.active-notes.length;
+                    open: root.show-active;
+                    toggled => { root.toggle-section("active"); }
+                }
+                if root.show-active: VerticalLayout {
+                    spacing: 1px;
+                    for row in root.active-notes: NoteRowItem {
+                        note: row;
+                        kind: "active";
+                        open => { root.open-note(row.id); }
+                        favorite => { root.toggle-favorite(row.id); }
+                        remove => { root.close-note(row.id); }
+                        pin => { root.toggle-pin(row.id); }
+                        archive => { root.toggle-archive(row.id); }
+                        duplicate => { root.duplicate-note(row.id); }
+                        sticky => { root.open-sticky(row.id); }
+                        set-color(c) => { root.set-color(row.id, c); }
+                        move-to-notebook => { root.move-to-notebook(row.id); }
+                    }
+                }
+
+                if root.pinned-notes.length > 0: SectionHeader {
+                    label: "PINNED";
+                    count: root.pinned-notes.length;
+                    open: root.show-pinned;
+                    toggled => { root.toggle-section("pinned"); }
+                }
+                if root.show-pinned: VerticalLayout {
+                    spacing: 1px;
+                    for row in root.pinned-notes: NoteRowItem {
+                        note: row;
+                        open => { root.open-note(row.id); }
+                        favorite => { root.toggle-favorite(row.id); }
+                        remove => { root.delete-note(row.id); }
+                        pin => { root.toggle-pin(row.id); }
+                        archive => { root.toggle-archive(row.id); }
+                        duplicate => { root.duplicate-note(row.id); }
+                        sticky => { root.open-sticky(row.id); }
+                        set-color(c) => { root.set-color(row.id, c); }
+                        move-to-notebook => { root.move-to-notebook(row.id); }
+                    }
+                }
+
+                if root.favorite-notes.length > 0: SectionHeader {
+                    label: "FAVORITES";
+                    count: root.favorite-notes.length;
+                    open: root.show-favorites;
+                    toggled => { root.toggle-section("favorites"); }
+                }
+                if root.show-favorites: VerticalLayout {
+                    spacing: 1px;
+                    for row in root.favorite-notes: NoteRowItem {
+                        note: row;
+                        open => { root.open-note(row.id); }
+                        favorite => { root.toggle-favorite(row.id); }
+                        remove => { root.delete-note(row.id); }
+                        pin => { root.toggle-pin(row.id); }
+                        archive => { root.toggle-archive(row.id); }
+                        duplicate => { root.duplicate-note(row.id); }
+                        sticky => { root.open-sticky(row.id); }
+                        set-color(c) => { root.set-color(row.id, c); }
+                        move-to-notebook => { root.move-to-notebook(row.id); }
+                    }
+                }
+
+                SectionHeader {
+                    label: "RECENT";
+                    count: root.recent-notes.length;
+                    open: root.show-recent;
+                    toggled => { root.toggle-section("recent"); }
+                }
+                if root.show-recent: VerticalLayout {
+                    spacing: 1px;
+                    for row in root.recent-notes: NoteRowItem {
+                        note: row;
+                        open => { root.open-note(row.id); }
+                        favorite => { root.toggle-favorite(row.id); }
+                        remove => { root.delete-note(row.id); }
+                        pin => { root.toggle-pin(row.id); }
+                        archive => { root.toggle-archive(row.id); }
+                        duplicate => { root.duplicate-note(row.id); }
+                        sticky => { root.open-sticky(row.id); }
+                        set-color(c) => { root.set-color(row.id, c); }
+                        move-to-notebook => { root.move-to-notebook(row.id); }
+                    }
+                }
+
+                SectionHeader {
+                    label: "ALL NOTES";
+                    count: root.all-notes.length;
+                    open: root.show-all;
+                    toggled => { root.toggle-section("all"); }
+                }
+                if root.show-all: VerticalLayout {
+                    spacing: 1px;
+                    for row in root.all-notes: NoteRowItem {
+                        note: row;
+                        open => { root.open-note(row.id); }
+                        favorite => { root.toggle-favorite(row.id); }
+                        remove => { root.delete-note(row.id); }
+                        pin => { root.toggle-pin(row.id); }
+                        archive => { root.toggle-archive(row.id); }
+                        duplicate => { root.duplicate-note(row.id); }
+                        sticky => { root.open-sticky(row.id); }
+                        set-color(c) => { root.set-color(row.id, c); }
+                        move-to-notebook => { root.move-to-notebook(row.id); }
+                    }
+                }
+
+                if root.saved-searches.length > 0: SectionHeader {
+                    label: "SAVED";
+                    count: root.saved-searches.length;
+                    open: root.show-saved;
+                    toggled => { root.toggle-section("saved"); }
+                }
+                if root.show-saved: VerticalLayout {
+                    spacing: 1px;
+                    for query in root.saved-searches: Rectangle {
+                        height: 30px;
+                        saved-touch := TouchArea {
+                            clicked => { root.apply-search(query); }
+                        }
+                        Rectangle {
+                            border-radius: 7px;
+                            background: root.search-text == query ? Theme.selected : saved-touch.has-hover ? Theme.hover : transparent;
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+                            VerticalLayout {
+                                alignment: center;
+                                Icon {
+                                    width: 12px;
+                                    height: 12px;
+                                    commands: Icons.search;
+                                    stroke: Theme.muted;
+                                }
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: query;
+                                overflow: elide;
+                                color: Theme.ink-soft;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                            if saved-touch.has-hover: VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    size: 22px;
+                                    icon-size: 11px;
+                                    description: "Remove saved search";
+                                    icon: Icons.close;
+                                    clicked => { root.remove-saved-search(query); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.notebooks.length > 0: SectionHeader {
+                    label: "NOTEBOOKS";
+                    count: root.notebooks.length;
+                    open: root.show-notebooks;
+                    toggled => { root.toggle-section("notebooks"); }
+                }
+                if root.show-notebooks: VerticalLayout {
+                    spacing: 1px;
+                    for notebook in root.notebooks: Rectangle {
+                        property <string> query: "notebook:" + notebook.name;
+                        height: 30px;
+                        nb-touch := TouchArea {
+                            clicked => { root.apply-search(parent.query); }
+                        }
+                        Rectangle {
+                            border-radius: 7px;
+                            background: root.search-text == parent.query ? Theme.selected : nb-touch.has-hover ? Theme.hover : transparent;
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 26px;
+                            spacing: 8px;
+                            VerticalLayout {
+                                alignment: center;
+                                Icon {
+                                    width: 13px;
+                                    height: 13px;
+                                    commands: Icons.folder;
+                                    stroke: Theme.muted;
+                                }
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: notebook.name;
+                                overflow: elide;
+                                color: Theme.ink-soft;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: notebook.count;
+                                color: Theme.muted;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                if root.tags.length > 0: SectionHeader {
+                    label: "TAGS";
+                    count: root.tags.length;
+                    open: root.show-tags;
+                    toggled => { root.toggle-section("tags"); }
+                }
+                if root.show-tags && root.tags.length > 0: HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 2px;
+                    padding-bottom: 6px;
+
+                    // Tag chips flow onto rows of three.
+                    VerticalLayout {
+                        spacing: 4px;
+                        for chip-row in Math.ceil(root.tags.length / 3): HorizontalLayout {
+                            spacing: 4px;
+                            alignment: start;
+                            for offset in 3: Rectangle {
+                                property <int> index: chip-row * 3 + offset;
+                                visible: self.index < root.tags.length;
+                                width: chip-text.preferred-width + 14px;
+                                height: 22px;
+                                border-radius: 11px;
+                                background: root.search-text == "#" + root.tags[self.index].name ? Theme.accent.with-alpha(0.25) : chip-touch.has-hover ? Theme.selected : Theme.hover;
+
+                                chip-text := Text {
+                                    text: "#" + root.tags[parent.index].name + "  " + root.tags[parent.index].count;
+                                    color: Theme.ink-soft;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                chip-touch := TouchArea {
+                                    clicked => { root.open-tag(root.tags[parent.index].name); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.archived-notes.length > 0: SectionHeader {
+                    label: "ARCHIVE";
+                    count: root.archived-notes.length;
+                    open: root.show-archive;
+                    toggled => { root.toggle-section("archive"); }
+                }
+                if root.show-archive: VerticalLayout {
+                    spacing: 1px;
+                    for row in root.archived-notes: NoteRowItem {
+                        note: row;
+                        kind: "archive";
+                        open => { root.open-note(row.id); }
+                        favorite => { root.toggle-favorite(row.id); }
+                        remove => { root.delete-note(row.id); }
+                        pin => { root.toggle-pin(row.id); }
+                        archive => { root.toggle-archive(row.id); }
+                        duplicate => { root.duplicate-note(row.id); }
+                        sticky => { root.open-sticky(row.id); }
+                        set-color(c) => { root.set-color(row.id, c); }
+                        move-to-notebook => { root.move-to-notebook(row.id); }
+                    }
+                }
+
+            }
+        }
+
+        // Bin, pinned to the bottom so it's always in reach however long the list is.
+        if root.bin-notes.length > 0: Rectangle {
+            height: 1px;
+            background: Theme.rule;
+        }
+        if root.bin-notes.length > 0: VerticalLayout {
+            padding-left: 6px;
+            padding-right: 6px;
+            padding-bottom: 4px;
+
+            SectionHeader {
+                label: "BIN";
+                count: root.bin-notes.length;
+                open: root.show-bin;
+                action: "Empty";
+                toggled => { root.toggle-section("bin"); }
+                action-clicked => { root.empty-bin(); }
+            }
+            // Scrolls on its own once it's taller than a few rows, so it never squeezes the notes.
+            if root.show-bin: bin-list := ScrollView {
+                height: min(root.bin-notes.length * 33px, 165px);
+
+                VerticalLayout {
+                    width: bin-list.visible-width;
+                    spacing: 1px;
+                    for row in root.bin-notes: NoteRowItem {
+                        note: row;
+                        kind: "bin";
+                        restore => { root.restore-note(row.id); }
+                        remove => { root.purge-note(row.id); }
+                    }
+                }
+            }
+        }
+
+        // Stats footer; click for writing stats.
+        Rectangle {
+            height: 1px;
+            background: Theme.rule;
+        }
+        Rectangle {
+            height: 32px;
+
+            footer-touch := TouchArea {
+                clicked => { root.open-stats(); }
+            }
+
+            HorizontalLayout {
+                padding-left: 16px;
+                Text {
+                    text: root.note-count + (root.note-count == 1 ? " note" : " notes") + "  ·  " + root.word-count + (root.word-count == 1 ? " word" : " words");
+                    color: footer-touch.has-hover ? Theme.ink-soft : Theme.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

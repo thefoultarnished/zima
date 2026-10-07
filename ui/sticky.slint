@@ -1,0 +1,121 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { DragArea, IconButton, Icons, ResizeEdge } from "widgets.slint";
+
+// A note popped out into its own small always-on-top window.
+export component StickyWindow inherits Window {
+    title: "Sticky note";
+    icon: @image-url("icon.svg");
+    no-frame: true;
+    always-on-top: true;
+    preferred-width: 300px;
+    preferred-height: 300px;
+    min-width: 200px;
+    min-height: 140px;
+    background: Theme.popover;
+    default-font-family: "Inter";
+
+    in property <string> note-title;
+    in-out property <string> body;
+    // Index into Theme.note-colors; -1 = none.
+    in property <int> note-color: -1;
+
+    callback body-edited(string);
+    callback close-sticky();
+    callback drag();
+    callback open-in-app();
+    callback resize-window(string);
+
+    // A wash of the note's colour.
+    Rectangle {
+        background: root.note-color >= 0 ? Theme.note-colors[root.note-color].with-alpha(0.14) : transparent;
+    }
+
+    VerticalLayout {
+        Rectangle {
+            height: 34px;
+            background: root.note-color >= 0 ? Theme.note-colors[root.note-color].with-alpha(0.22) : Theme.hover;
+
+            DragArea {
+                drag => { root.drag(); }
+            }
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 6px;
+                spacing: 2px;
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.note-title;
+                    overflow: elide;
+                    color: Theme.ink-soft;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        size: 24px;
+                        icon-size: 12px;
+                        description: "Open in main window";
+                        icon: Icons.edit;
+                        clicked => { root.open-in-app(); }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        size: 24px;
+                        icon-size: 12px;
+                        description: "Close sticky note";
+                        icon: Icons.close;
+                        clicked => { root.close-sticky(); }
+                    }
+                }
+            }
+        }
+
+        scroll := ScrollView {
+            content-width: self.visible-width;
+            content-height: max(self.visible-height, input.preferred-height + 24px);
+
+            input := TextInput {
+                x: 12px;
+                y: 10px;
+                width: scroll.visible-width - 24px;
+                height: max(self.preferred-height, scroll.visible-height - 20px);
+                text <=> root.body;
+                single-line: false;
+                wrap: word-wrap;
+                font-family: Theme.font;
+                font-size: 14px;
+                color: Theme.ink;
+                selection-background-color: Theme.selection;
+                selection-foreground-color: Theme.ink;
+                edited => { root.body-edited(self.text); }
+                cursor-position-changed(cpos) => {
+                    if (self.y + cpos.y + scroll.content-y > scroll.visible-height - 30px) {
+                        scroll.content-y = scroll.visible-height - 30px - self.y - cpos.y;
+                    } else if (self.y + cpos.y + scroll.content-y < 0) {
+                        scroll.content-y = min(0px, -self.y - cpos.y);
+                    }
+                }
+            }
+        }
+    }
+
+    // Resize from the bottom-right corner.
+    ResizeEdge {
+        x: root.width - 14px;
+        y: root.height - 14px;
+        width: 14px;
+        height: 14px;
+        direction: "se";
+        mouse-cursor: nwse-resize;
+        resize(d) => { root.resize-window(d); }
+    }
+}
