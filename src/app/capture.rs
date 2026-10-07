@@ -53,11 +53,18 @@ impl App {
                     with_app(&app, move |a| a.save_capture(text.into()));
                 }
             });
-            let weak = window.as_weak();
+            let app = self.this.clone();
             window.on_cancel(move || {
-                if let Some(w) = weak.upgrade() {
-                    let _ = w.hide();
+                if let Some(app) = app.upgrade() {
+                    with_app(&app, |a| a.close_capture());
                 }
+            });
+            let app = self.this.clone();
+            window.window().on_close_requested(move || {
+                if let Some(app) = app.upgrade() {
+                    with_app(&app, |a| a.close_capture());
+                }
+                slint::CloseRequestResponse::HideWindow
             });
             self.capture = Some(window);
         }
@@ -83,10 +90,17 @@ impl App {
         });
     }
 
-    fn save_capture(&mut self, text: String) {
-        if let Some(window) = &self.capture {
+    /// Close the quick-capture box and free its window (about 10 MB); Ctrl+Alt+N builds a new one.
+    fn close_capture(&mut self) {
+        if let Some(window) = self.capture.take() {
             let _ = window.hide();
+            // Dropped after this turn, not inside one of its own callbacks.
+            Timer::single_shot(Duration::ZERO, move || drop(window));
         }
+    }
+
+    fn save_capture(&mut self, text: String) {
+        self.close_capture();
         let text = text.trim().to_string();
         if text.is_empty() {
             return;

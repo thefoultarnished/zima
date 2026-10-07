@@ -1,5 +1,6 @@
 //! App state: owns the notes, keeps the UI in sync, and saves to disk.
 
+mod backups;
 mod capture;
 mod custom_theme;
 use custom_theme::CUSTOM;
@@ -14,6 +15,7 @@ mod navigate;
 mod organize;
 mod stats;
 mod sticky;
+mod summary;
 mod sync;
 mod tasks_view;
 mod words;
@@ -26,7 +28,7 @@ use std::rc::{self, Rc};
 use std::time::Duration;
 
 use chrono::{Local, TimeZone};
-use slint::{ComponentHandle, ModelRc, StyledText, Timer, TimerMode, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, StyledText, Timer, TimerMode, VecModel, Weak};
 
 use crate::markdown::{self, Kind};
 use crate::model::{Note, NoteId, Reminder, UiState, now_ms};
@@ -37,12 +39,20 @@ use navigate::{PaletteEntry, PaletteMode};
 
 /// How long to wait after the last keystroke before writing to disk.
 const SAVE_DELAY: Duration = Duration::from_millis(500);
+/// How long typing must pause before the preview is redrawn and words are counted. Doing either
+/// on every key made typing in a long note lag.
+const PAUSE_DELAY: Duration = Duration::from_millis(150);
 const RECENT_COUNT: usize = 5;
 const UI_SCALE_MIN: f32 = 0.8;
 const UI_SCALE_MAX: f32 = 2.0;
 const TOAST_DURATION: Duration = Duration::from_millis(3500);
+/// Wait a little after launch before the daily backup, so it doesn't slow down startup.
+const BACKUP_DELAY: Duration = Duration::from_secs(10);
 /// How often to check for due reminders.
 const REMINDER_CHECK: Duration = Duration::from_secs(5);
+/// Colour of `==highlighted==` text in Preview: amber, readable on light and dark themes.
+const HIGHLIGHT_LIGHT: &str = "#b45309";
+const HIGHLIGHT_DARK: &str = "#fbbf24";
 
 pub struct App {
     store: Store,
@@ -55,7 +65,7 @@ pub struct App {
     reminders: Vec<Reminder>,
     /// Open sticky-note windows.
     stickies: Vec<sticky::Sticky>,
-    /// The quick-capture window, created on first use.
+    /// The quick-capture window, only while it's open.
     capture: Option<crate::CaptureWindow>,
     /// Keeps the global Ctrl+Alt+N hotkey registered.
     hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
@@ -76,6 +86,10 @@ pub struct App {
     /// An `@` whose suggestions were dismissed with Esc.
     dismissed_at: Option<usize>,
     cursor: usize,
+    /// The note the editor shows, whose cursor `cursor` is.
+    shown: Option<NoteId>,
+    /// Notes picked with Ctrl+click in the sidebar, for doing something to all of them at once.
+    selected: Vec<NoteId>,
     /// Find bar: the query, every match (byte ranges) and the selected one.
     find_query: String,
     find_matches: Vec<(usize, usize)>,
@@ -88,6 +102,8 @@ pub struct App {
     redo: Vec<Snapshot>,
     palette_mode: PaletteMode,
     palette_entries: Vec<PaletteEntry>,
+    /// Titles on the link hover card now showing (empty: none).
+    link_preview: Vec<String>,
     /// Closed notes, most recent last (Ctrl+Shift+T).
     recently_closed: Vec<NoteId>,
     /// First day of the month the calendar shows.
@@ -101,7 +117,14 @@ pub struct App {
     slides: Vec<Vec<MdBlock>>,
     slide: usize,
     restore_to: Option<crate::window::Placement>,
+    /// The day the automatic backup last ran (or found nothing to do).
+    backed_up_on: Option<chrono::NaiveDate>,
     save_timer: Timer,
+    pause_timer: Timer,
+    /// Words in the open note at the last count; words typed beyond it go into the writing stats.
+    word_base: usize,
+    /// What the lists need from each note's text, kept until the note changes.
+    summaries: RefCell<summary::Summaries>,
     toast_timer: Timer,
     this: rc::Weak<RefCell<App>>,
     ui: Weak<AppWindow>,
@@ -116,6 +139,7 @@ enum ToastAction {
     Remind(String, i64),
     OpenNote(NoteId),
     Restart,
+    ShowBackups,
 }
 
 struct FocusTimer {
@@ -162,6 +186,8 @@ impl App {
             suggestion_at: None,
             dismissed_at: None,
             cursor: 0,
+            shown: None,
+            selected: Vec::new(),
             find_query: String::new(),
             find_matches: Vec::new(),
             find_index: 0,
@@ -171,6 +197,7 @@ impl App {
             redo: Vec::new(),
             palette_mode: PaletteMode::All,
             palette_entries: Vec::new(),
+            link_preview: Vec::new(),
             recently_closed: Vec::new(),
             calendar_month: Local::now().date_naive(),
             shortcut_filter: String::new(),
@@ -179,7 +206,11 @@ impl App {
             slides: Vec::new(),
             slide: 0,
             restore_to: None,
+            backed_up_on: None,
             save_timer: Timer::default(),
+            pause_timer: Timer::default(),
+            word_base: 0,
+            summaries: Default::default(),
             toast_timer: Timer::default(),
             this: rc::Weak::new(),
             ui: ui.as_weak(),
@@ -190,6 +221,7 @@ impl App {
         // Drop stale references, e.g. to notes deleted outside the app.
         let live: HashSet<NoteId> = this.notes.iter().filter(|n| n.is_live()).map(|n| n.id).collect();
         this.state.open_ids.retain(|id| live.contains(id));
+        this.state.cursors.retain(|id, _| live.contains(id));
         if !this.state.current.is_some_and(|id| this.state.open_ids.contains(&id)) {
             this.state.current = this.state.open_ids.last().copied();
         }
@@ -209,6 +241,11 @@ impl App {
         ui.set_sidebar_open(!this.state.sidebar_collapsed);
         ui.set_launch_at_login(system::launch_at_login());
         ui.set_software_rendering(this.state.software_rendering);
+        ui.set_close_to_tray(this.state.close_to_tray);
+        ui.set_note_order(this.state.note_order);
+        if let Some(placement) = this.state.window {
+            window::restore(ui, placement);
+        }
         this.apply_appearance();
 
         if !import.is_empty() {
@@ -236,6 +273,11 @@ impl App {
 
     fn find(&self, id: NoteId) -> Option<&Note> {
         self.notes.iter().find(|n| n.id == id)
+    }
+
+    /// `note`'s words, tags, checklist count and tasks, read again only if it changed.
+    fn summary(&self, note: &Note) -> Rc<summary::Summary> {
+        self.summaries.borrow_mut().get(note, Local::now())
     }
 
     fn find_mut(&mut self, id: NoteId) -> Option<&mut Note> {
@@ -281,6 +323,8 @@ impl App {
             self.state.open_ids.push(id);
         }
         self.state.current = Some(id);
+        // Opening a note with a plain click ends picking notes.
+        self.selected.clear();
         self.save_state();
         self.refresh_lists();
         self.load_editor();
@@ -322,6 +366,8 @@ impl App {
     pub fn purge(&mut self, id: NoteId) {
         self.notes.retain(|n| n.id != id);
         self.dirty.remove(&id);
+        self.selected.retain(|&s| s != id);
+        self.state.cursors.remove(&id);
         if let Err(e) = self.store.delete_body(id) {
             eprintln!("failed to delete note {id}: {e}");
         }
@@ -343,24 +389,26 @@ impl App {
         let Some(note) = self.current_mut() else { return };
         note.title = title;
         note.modified = now_ms();
+        let id = note.id;
         self.index_dirty = true;
-        self.refresh_lists();
-        self.schedule_save();
-        if let Some(id) = self.state.current {
-            self.sync_sticky(id);
+        // Just this note's rows for now; the save after typing pauses rebuilds the lists (order, search).
+        if let Some(ui) = self.ui.upgrade() {
+            let title = self.find(id).map(display_title).unwrap_or_default();
+            for rows in [ui.get_active_notes(), ui.get_pinned_notes(), ui.get_favorite_notes(), ui.get_recent_notes(), ui.get_all_notes(), ui.get_archived_notes()] {
+                retitle_rows(&rows, id, &title);
+            }
         }
+        self.schedule_save();
+        self.sync_sticky(id);
     }
 
     /// Called on every keystroke in the body. `cursor` is the cursor's byte offset in `body`.
     pub fn set_body(&mut self, body: String, cursor: usize) {
         let Some(note) = self.current_mut() else { return };
         let grew = body.len() > note.body.len();
-        let words_before = note.body.split_whitespace().count();
         note.body = body;
         note.modified = now_ms();
-        let words_after = note.body.split_whitespace().count();
         let id = note.id;
-        self.record_words(words_before, words_after);
         self.dirty.insert(id);
         self.index_dirty = true;
         self.cursor = cursor;
@@ -368,7 +416,8 @@ impl App {
         if grew && !self.check_line_command(id, cursor) {
             self.after_typing(cursor);
         }
-        self.after_body_change();
+        self.after_edit();
+        self.schedule_pause();
         self.sync_sticky(id);
     }
 
@@ -400,6 +449,8 @@ impl App {
     }
 
     fn set_body_from_rust(&mut self, body: String, selection: Option<(usize, usize)>, record: bool) {
+        // Typing so far counts for the stats; this edit, made by Zima, doesn't.
+        self.count_words();
         let cursor_before = self.cursor;
         let Some(note) = self.current_mut() else { return };
         let before = std::mem::replace(&mut note.body, body);
@@ -454,14 +505,24 @@ impl App {
     }
 
     fn after_body_change(&mut self) {
-        self.update_suggestions();
         self.refresh_preview();
+        self.after_edit();
+        // Not typed (opened, synced, edited by Zima): words from here on count as written.
+        let words = self.current().map_or(0, |n| n.body.split_whitespace().count());
+        self.word_base = words;
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_note_words(words as i32);
+        }
+    }
+
+    /// What has to keep up with every key: `@` suggestions and find matches.
+    fn after_edit(&mut self) {
+        self.update_suggestions();
         if !self.find_query.is_empty() {
             self.recompute_matches();
             self.update_find_ui();
         }
         if let (Some(ui), Some(note)) = (self.ui.upgrade(), self.current()) {
-            ui.set_note_words(note.body.split_whitespace().count() as i32);
             ui.set_note_goal(note.goal.unwrap_or(0) as i32);
         }
     }
@@ -1022,6 +1083,7 @@ impl App {
         self.state.view_mode = mode.clamp(0, 2);
         self.save_state();
         self.refresh_preview();
+        self.refresh_backlinks();
     }
 
     pub fn set_typewriter(&mut self, on: bool) {
@@ -1040,6 +1102,11 @@ impl App {
         self.save_state();
         let message = if on { "Low-memory rendering is on after a restart" } else { "GPU rendering is back after a restart" };
         self.toast_with(message, false, vec![("Restart now".into(), ToastAction::Restart)]);
+    }
+
+    pub fn set_close_to_tray(&mut self, on: bool) {
+        self.state.close_to_tray = on;
+        self.save_state();
     }
 
     pub fn set_launch_at_login(&mut self, enabled: bool) {
@@ -1176,13 +1243,34 @@ impl App {
 
     // ----- Window and tray -----
 
-    /// The window was closed: keep running in the tray. The first time, say so.
-    pub fn hidden_to_tray(&mut self) {
+    /// The window's close button or Alt+F4: hide to the tray, or quit if that setting is off.
+    /// The first time it hides, say so.
+    pub fn window_closed(&mut self) {
+        self.remember_window();
+        self.remember_cursor();
         self.flush();
+        if !self.state.close_to_tray {
+            let _ = slint::quit_event_loop();
+            return;
+        }
         if !self.state.tray_hint_shown {
             self.state.tray_hint_shown = true;
             self.save_state();
             show_notification("Zima is still running", "Reminders will still fire. Quit from the tray icon.");
+        }
+    }
+
+    /// Save where the main window is, so it opens there next time. Not while presenting, when it
+    /// covers the screen (the spot to go back to is saved once presenting ends).
+    pub fn remember_window(&mut self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        if self.restore_to.is_some() {
+            return;
+        }
+        let placement = window::placement(&ui, self.state.window);
+        if placement != self.state.window {
+            self.state.window = placement;
+            self.save_state();
         }
     }
 
@@ -1243,6 +1331,7 @@ impl App {
                 }
             }
             ToastAction::Restart => self.restart(),
+            ToastAction::ShowBackups => self.open_backups_folder(),
         }
     }
 
@@ -1257,6 +1346,8 @@ impl App {
                 app.flush();
                 app.save_state();
                 app.refresh_lists();
+                // A title or [[link]] edit can change which notes link here.
+                app.refresh_backlinks();
             }
         });
     }
@@ -1293,6 +1384,9 @@ impl App {
     /// Push the current note into the editor. Only called when switching notes, so typing never resets the cursor.
     fn load_editor(&mut self) {
         let Some(ui) = self.ui.upgrade() else { return };
+        // Words just typed in the note being left still count.
+        self.count_words();
+        self.note_cursor();
         match self.current() {
             Some(note) => {
                 ui.set_has_note(true);
@@ -1307,13 +1401,47 @@ impl App {
                 ui.set_note_body("".into());
             }
         }
-        self.cursor = 0;
+        self.shown = self.state.current;
+        self.cursor = self.current().map_or(0, |n| saved_cursor(&n.body, self.state.cursors.get(&n.id).copied()));
         self.dismissed_at = None;
         self.undo.clear();
         self.redo.clear();
         self.after_body_change();
+        self.refresh_backlinks();
         self.apply_note_overrides();
         ui.invoke_focus_default();
+        // Back to where the cursor was. After this turn, once the editor has scrolled the new note to the top.
+        if self.cursor > 0 && self.state.view_mode != 2 {
+            let (id, at) = (self.shown, self.cursor);
+            let this = self.this.clone();
+            Timer::single_shot(Duration::ZERO, move || {
+                let Some(app) = this.upgrade() else { return };
+                with_app(&app, move |a| {
+                    if let (Some(ui), true) = (a.ui.upgrade(), a.shown == id) {
+                        ui.invoke_set_body_selection(at as i32, at as i32);
+                    }
+                });
+            });
+        }
+    }
+
+    /// Note where the cursor is in the note on screen, for when it's opened again.
+    fn note_cursor(&mut self) {
+        let Some(id) = self.shown else { return };
+        if self.cursor == 0 {
+            self.state.cursors.remove(&id);
+        } else {
+            self.state.cursors.insert(id, self.cursor);
+        }
+    }
+
+    /// Save where the cursor is, if it moved since the last save (quitting, hiding to the tray).
+    pub fn remember_cursor(&mut self) {
+        let before = self.state.cursors.clone();
+        self.note_cursor();
+        if self.state.cursors != before {
+            self.save_state();
+        }
     }
 
     /// Re-render the Markdown preview (only when it's visible).
@@ -1327,7 +1455,31 @@ impl App {
             _ => Vec::new(),
         };
         ui.set_blocks(ModelRc::new(VecModel::from(blocks)));
-        self.refresh_backlinks();
+    }
+
+    /// Redraw the preview and count words once typing pauses.
+    fn schedule_pause(&self) {
+        let this = self.this.clone();
+        self.pause_timer.start(TimerMode::SingleShot, PAUSE_DELAY, move || {
+            if let Some(app) = this.upgrade() {
+                with_app(&app, |a| {
+                    if a.state.view_mode != 0 {
+                        a.refresh_preview();
+                    }
+                    a.count_words();
+                });
+            }
+        });
+    }
+
+    /// Show the open note's word count, and add any words typed since the last count to today's stats.
+    fn count_words(&mut self) {
+        let Some(words) = self.shown.and_then(|id| self.find(id)).map(|n| n.body.split_whitespace().count()) else { return };
+        self.record_words(self.word_base, words);
+        self.word_base = words;
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_note_words(words as i32);
+        }
     }
 
     /// Rebuild every sidebar section.
@@ -1349,31 +1501,37 @@ impl App {
                 .map(|l| l.trim().chars().take(80).collect())
                 .unwrap_or_default()
         };
+        // Sorted by creation date, the times shown are creation times too.
+        let by_created = self.state.note_order == 2;
         let row = |n: &Note| NoteRow {
             id: n.id.to_string().into(),
             title: display_title(n).into(),
-            meta: relative_time(n.modified).into(),
+            meta: relative_time(if by_created && n.created > 0 { n.created } else { n.modified }).into(),
             favorite: n.favorite,
             current: self.state.current == Some(n.id),
             dim: !matches(n),
             pinned: n.pinned,
             color: n.color.map_or(-1, |c| c as i32),
-            progress: organize::checklist_progress(&n.body).into(),
+            emoji: n.emoji.as_deref().and_then(crate::emoji::clean).unwrap_or_default().into(),
+            progress: self.summary(n).progress.as_str().into(),
             snippet: snippet(n).into(),
+            selected: self.selected.contains(&n.id),
         };
 
         let mut listed: Vec<&Note> = self.notes.iter().filter(|n| n.is_listed()).collect();
         listed.sort_by_key(|n| Reverse(n.modified));
+        let recent: Vec<&Note> = listed.iter().copied().filter(|n| matches(n)).take(RECENT_COUNT).collect();
+        organize::sort_notes(&mut listed, self.state.note_order);
         let mut binned: Vec<&Note> = self.notes.iter().filter(|n| !n.is_live()).collect();
         binned.sort_by_key(|n| Reverse(n.deleted_at));
         let mut archived: Vec<&Note> = self.notes.iter().filter(|n| n.is_live() && n.archived).collect();
-        archived.sort_by_key(|n| Reverse(n.modified));
+        organize::sort_notes(&mut archived, self.state.note_order);
 
         // Active keeps every open note and fades non-matches (like Zima); other sections filter.
         let active = self.state.open_ids.iter().filter_map(|&id| self.find(id)).map(row);
         let pinned = listed.iter().copied().filter(|n| n.pinned && matches(n)).map(row);
         let favorites = listed.iter().copied().filter(|n| n.favorite && matches(n)).map(row);
-        let recent = listed.iter().copied().filter(|n| matches(n)).take(RECENT_COUNT).map(row);
+        let recent = recent.into_iter().map(row);
         let all = listed.iter().copied().filter(|n| matches(n)).map(row);
         let bin = binned.iter().copied().filter(|n| matches(n)).map(row);
         let archive = archived.iter().copied().filter(|n| matches(n)).map(row);
@@ -1386,10 +1544,34 @@ impl App {
         ui.set_bin_notes(model(bin));
         ui.set_archived_notes(model(archive));
         ui.set_note_count(listed.len() as i32);
-        ui.set_word_count(listed.iter().map(|n| n.body.split_whitespace().count()).sum::<usize>() as i32);
+        ui.set_selected_count(self.selected.len() as i32);
+        ui.set_word_count(listed.iter().map(|n| self.summary(n).words).sum::<usize>() as i32);
+        let ids: HashSet<NoteId> = self.notes.iter().map(|n| n.id).collect();
+        self.summaries.borrow_mut().retain(|id| ids.contains(&id));
         self.refresh_tasks();
         self.refresh_finding();
         self.refresh_tags();
+    }
+}
+
+/// A saved cursor spot that still fits the note: within the text and not inside a character.
+/// The note may have been edited elsewhere since (synced folder).
+fn saved_cursor(body: &str, saved: Option<usize>) -> usize {
+    let mut at = saved.unwrap_or(0).min(body.len());
+    while !body.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+/// Give note `id`'s rows in a sidebar list a new title, leaving the other rows alone.
+fn retitle_rows(rows: &ModelRc<NoteRow>, id: NoteId, title: &str) {
+    let id = id.to_string();
+    for i in 0..rows.row_count() {
+        if let Some(mut row) = rows.row_data(i).filter(|r| r.id == id.as_str() && r.title != title) {
+            row.title = title.into();
+            rows.set_row_data(i, row);
+        }
     }
 }
 
@@ -1398,7 +1580,13 @@ fn model(rows: impl Iterator<Item = NoteRow>) -> ModelRc<NoteRow> {
 }
 
 fn md_block(block: markdown::Block, dark: bool) -> MdBlock {
-    let styled = |text: &str| StyledText::from_markdown(text).unwrap_or_else(|_| StyledText::from_plain_text(text));
+    let mark = if dark { HIGHLIGHT_DARK } else { HIGHLIGHT_LIGHT };
+    // A highlight that crosses bold or italic can't be drawn; show its `==` as typed instead.
+    let styled = |text: &str| {
+        StyledText::from_markdown(&markdown::highlights(text, mark))
+            .or_else(|_| StyledText::from_markdown(&markdown::plain_marks(text)))
+            .unwrap_or_else(|_| StyledText::from_plain_text(&markdown::plain_marks(text)))
+    };
     let cells: Vec<StyledText> = if block.kind == Kind::Code {
         // Code blocks: one highlighted line per cell.
         crate::highlight::highlight(&block.text, &block.marker, dark).iter().map(|l| styled(l)).collect()
@@ -1409,6 +1597,20 @@ fn md_block(block: markdown::Block, dark: bool) -> MdBlock {
             // Header cells are bold.
             .map(|cell| if block.level == 1 && !cell.is_empty() { styled(&format!("**{cell}**")) } else { styled(cell) })
             .collect()
+    };
+    // Notes this block links to (code never links), for the hover card.
+    let links: Vec<slint::SharedString> = if block.kind == Kind::Code {
+        Vec::new()
+    } else {
+        let mut titles = markdown::note_links(&block.text);
+        for cell in &block.cells {
+            for title in markdown::note_links(cell) {
+                if !titles.iter().any(|t| t.eq_ignore_ascii_case(&title)) {
+                    titles.push(title);
+                }
+            }
+        }
+        titles.into_iter().map(Into::into).collect()
     };
     MdBlock {
         kind: block.kind.name().into(),
@@ -1421,6 +1623,7 @@ fn md_block(block: markdown::Block, dark: bool) -> MdBlock {
         cells: ModelRc::new(VecModel::from(cells)),
         line: block.line as i32,
         space: block.space as i32,
+        note_links: ModelRc::new(VecModel::from(links)),
     }
 }
 
@@ -1436,11 +1639,7 @@ fn display_title(note: &Note) -> String {
         return title.to_string();
     }
     // First non-empty line, without Markdown symbols ("# ", "- [ ] ", "**", …).
-    let plain = |line: &str| -> String {
-        let line = line.trim_start_matches(['#', '>', '-', '+', ' ']);
-        let line = line.strip_prefix("[ ] ").or_else(|| line.strip_prefix("[x] ")).unwrap_or(line);
-        line.chars().filter(|c| !matches!(c, '*' | '_' | '~' | '`')).take(60).collect::<String>().trim().to_string()
-    };
+    let plain = |line: &str| -> String { markdown::strip_markers(line).chars().take(60).collect::<String>().trim().to_string() };
     note.body
         .lines()
         .map(plain)
@@ -1471,14 +1670,12 @@ fn relative_time(ms: i64) -> String {
 fn show_notification(title: &str, body: &str) {
     let (title, body) = (title.to_string(), body.to_string());
     std::thread::spawn(move || {
-        if let Err(e) = notify_rust::Notification::new().appname("Zima").summary(&title).body(&body).show() {
+        if let Err(e) = crate::system::notification().summary(&title).body(&body).show() {
             eprintln!("failed to show notification: {e}");
         }
     });
 }
 
-/// "#rrggbb" → colour.
-/// "#rrggbb" or "#rrggbbaa".
 /// One step of a size setting (text size, interface size): ±10% per step, 0 resets to 100%.
 /// Rounded to whole tens so repeated steps don't drift (0.1 isn't exact in floating point).
 fn step_scale(current: f32, step: i32, min: f32, max: f32) -> f32 {
@@ -1489,6 +1686,8 @@ fn step_scale(current: f32, step: i32, min: f32, max: f32) -> f32 {
     .clamp(min, max)
 }
 
+/// "#rrggbb" → colour.
+/// "#rrggbb" or "#rrggbbaa".
 fn parse_hex_color(hex: &str) -> Option<slint::Color> {
     let hex = hex.trim().strip_prefix('#')?;
     let value = u32::from_str_radix(hex, 16).ok()?;
@@ -1550,6 +1749,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_set_format_bar, |a, shown| a.set_format_bar(shown));
     on!(on_set_launch_at_login, |a, enabled| a.set_launch_at_login(enabled));
     on!(on_set_software_rendering, |a, on| a.set_software_rendering(on));
+    on!(on_set_close_to_tray, |a, on| a.set_close_to_tray(on));
     on!(on_export_note, |a| a.export_note());
     on!(on_indent, |a, outdent| a.indent(outdent));
     on!(on_find_edited, |a, query| a.find_text(query.into()));
@@ -1579,6 +1779,12 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_apply_search, |a, query| a.apply_search(query.into()));
     on!(on_open_on_this_day, |a| a.open_palette(PaletteMode::OnThisDay));
     on_id!(on_move_to_notebook, pick_notebook);
+    on_id!(on_pick_emoji, pick_emoji);
+    on!(on_link_hover, |a, titles, x, y| {
+        let titles: Vec<String> = slint::Model::iter(&titles).map(|t| t.to_string()).collect();
+        a.link_hover(titles, x, y);
+    });
+    on!(on_link_hover_end, |a| a.hide_link_preview());
     on!(on_tasks_show_done_changed, |a, _on| a.refresh_tasks());
     {
         let app = app.clone();
@@ -1619,7 +1825,6 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_set_spotlight, |a, on| a.set_spotlight(on));
     on_now!(on_redo, |a| a.redo());
     on_now!(on_handle_shortcut, |a, combo| a.shortcut(&combo));
-    on!(on_open_shortcuts, |a| a.open_shortcuts());
     on!(on_slide_step, |a, delta| a.step_slide(delta));
     on!(on_stop_presenting, |a| a.stop_presenting());
     on!(on_set_shortcut, |a, id, combo| a.set_shortcut(&id, &combo));
@@ -1640,6 +1845,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     std::mem::forget(timer_tick);
     on!(on_import_zima, |a| a.import_zima());
     on!(on_open_notes_folder, |a| a.open_notes_folder());
+    on!(on_open_backups_folder, |a| a.open_backups_folder());
     // `[[note]]` links open (or create) notes; everything else goes to the browser.
     on!(on_link_clicked, |a, url| match url.strip_prefix("note:") {
         Some(title) => a.open_link(&title.replace("%20", " ")),
@@ -1666,6 +1872,10 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_calendar_pick, |a, date| a.pick_calendar_day(&date));
     on!(on_open_calendar, |a| a.open_calendar());
     on_id!(on_toggle_pin, toggle_pin);
+    on!(on_set_note_order, |a, order| a.set_note_order(order));
+    on_id!(on_select_note, toggle_selected);
+    on!(on_bulk_action, |a, action| a.bulk(&action));
+    on!(on_clear_selection, |a| a.clear_selection());
     on_id!(on_toggle_archive, toggle_archive);
     on_id!(on_duplicate_note, duplicate);
     on_id!(on_open_sticky, open_sticky);
@@ -1738,10 +1948,24 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
                 app.refresh_lists();
                 app.refresh_reminders();
                 app.tick_auto_theme();
+                app.auto_backup();
+                // Also catches the window's spot if Zima is ended without quitting (Windows shutting down).
+                app.remember_window();
+                app.remember_cursor();
             }
         }
     });
     std::mem::forget(tick);
+
+    // Today's backup, shortly after launch (and then by the minute tick above, after midnight).
+    Timer::single_shot(BACKUP_DELAY, {
+        let app = Rc::downgrade(app);
+        move || {
+            if let Some(app) = app.upgrade() {
+                with_app(&app, |a| a.auto_backup());
+            }
+        }
+    });
 }
 
 /// Run `f` on the app now, or, if the app is busy (Slint can call back into Rust synchronously,
@@ -1779,6 +2003,66 @@ mod tests {
         assert_eq!(step_scale(1.0, 1, 0.8, 2.0), 1.1);
         assert_eq!(step_scale(1.0, -1, 0.8, 2.0), 0.9);
         assert_eq!(step_scale(1.5, 1, UI_SCALE_MIN, UI_SCALE_MAX), 1.6);
+    }
+
+    fn rows(items: &[(&str, &str)]) -> ModelRc<NoteRow> {
+        model(items.iter().map(|(id, title)| NoteRow { id: (*id).into(), title: (*title).into(), meta: "1d".into(), ..Default::default() }))
+    }
+
+    fn titles(rows: &ModelRc<NoteRow>) -> Vec<String> {
+        rows.iter().map(|r| r.title.to_string()).collect()
+    }
+
+    #[test]
+    fn retitle_changes_only_that_note() {
+        let list = rows(&[("1", "Apples"), ("2", "Pears"), ("3", "Plums")]);
+        retitle_rows(&list, 2, "Pears and figs");
+        assert_eq!(titles(&list), vec!["Apples", "Pears and figs", "Plums"]);
+        // The rest of the row is kept.
+        assert_eq!(list.row_data(1).unwrap().meta, "1d");
+    }
+
+    #[test]
+    fn retitle_leaves_other_lists_alone() {
+        let list = rows(&[("1", "Apples"), ("3", "Plums")]);
+        retitle_rows(&list, 2, "Pears");
+        assert_eq!(titles(&list), vec!["Apples", "Plums"]);
+        // An id that only starts the same is a different note.
+        let list = rows(&[("12", "Twelve")]);
+        retitle_rows(&list, 1, "One");
+        assert_eq!(titles(&list), vec!["Twelve"]);
+    }
+
+    #[test]
+    fn retitle_edges() {
+        let empty = rows(&[]);
+        retitle_rows(&empty, 1, "x");
+        assert_eq!(empty.row_count(), 0);
+        let list = rows(&[("1", "Old")]);
+        retitle_rows(&list, 1, "");
+        assert_eq!(titles(&list), vec![""]);
+    }
+
+    #[test]
+    fn saved_cursor_goes_back() {
+        assert_eq!(saved_cursor("hello world", Some(6)), 6);
+        assert_eq!(saved_cursor("hello", Some(5)), 5);
+    }
+
+    #[test]
+    fn saved_cursor_none_is_start() {
+        assert_eq!(saved_cursor("hello", None), 0);
+        assert_eq!(saved_cursor("", None), 0);
+    }
+
+    #[test]
+    fn saved_cursor_fits_a_changed_note() {
+        // The note got shorter on another device.
+        assert_eq!(saved_cursor("hi", Some(40)), 2);
+        assert_eq!(saved_cursor("", Some(3)), 0);
+        // "é" is two bytes; never land between them.
+        assert_eq!(saved_cursor("café!", Some(4)), 3);
+        assert_eq!(saved_cursor("café!", Some(5)), 5);
     }
 
     #[test]

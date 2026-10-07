@@ -27,8 +27,4 @@ impl App {
     pub fn toggle_lock(&mut self) {
         self.not_yet();
     }
-
-    pub fn backup_now(&mut self, _manual: bool) {
-        self.not_yet();
-    }
 }

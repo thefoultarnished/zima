@@ -14,6 +14,16 @@ export struct MdBlock {
     cells: [styled-text],
     line: int,
     space: int,
+    // Titles of the [[notes]] this block links to (for the hover preview).
+    note-links: [string],
+}
+
+// One note shown in the link hover card.
+export struct LinkPreview {
+    title: string,
+    snippet: string,
+    missing: bool,
+    emoji: string,
 }
 
 component Rich inherits StyledText {
@@ -28,180 +38,262 @@ export component BlockView {
     callback toggle-task(int);
     callback link-clicked(string);
 
-    VerticalLayout {
-        padding-top: root.block.space * 1px;
+    // Preview only: hovering a block with [[links]] reports them so the app can show a card.
+    in property <bool> link-previews: false;
+    callback link-hover([string], length, length);
+    callback link-hover-end();
 
-        if root.block.kind == "heading": Rich {
-            text: root.block.text;
-            default-font-size: (root.block.level == 1 ? 26px : root.block.level == 2 ? 21px : root.block.level == 3 ? 18px : 16px) * Theme.text-scale;
-            link-clicked(url) => { root.link-clicked(url); }
-        }
-
-        if root.block.kind == "paragraph": Rich {
-            text: root.block.text;
-            link-clicked(url) => { root.link-clicked(url); }
-        }
-
-        if root.block.kind == "quote": HorizontalLayout {
-            spacing: 12px;
-            Rectangle {
-                width: 3px;
-                border-radius: 1.5px;
-                background: Theme.accent.with-alpha(0.7);
+    hover := TouchArea {
+        enabled: root.link-previews && root.block.note-links.length > 0;
+        changed has-hover => {
+            if (!self.has-hover) {
+                root.link-hover-end();
             }
-            Rich {
+        }
+
+        VerticalLayout {
+            padding-top: root.block.space * 1px;
+
+            if root.block.kind == "heading": Rich {
                 text: root.block.text;
-                default-color: Theme.ink-soft;
+                default-font-size: (root.block.level == 1 ? 26px : root.block.level == 2 ? 21px : root.block.level == 3 ? 18px : 16px) * Theme.text-scale;
                 link-clicked(url) => { root.link-clicked(url); }
             }
-        }
 
-        if root.block.kind == "item": HorizontalLayout {
-            padding-left: root.block.indent * 22px;
-            spacing: 8px;
-            Text {
-                width: 18px;
-                text: root.block.marker;
-                color: Theme.muted;
-                font-family: Theme.font;
-                font-size: 16px;
-                horizontal-alignment: right;
-            }
-            Rich {
+            if root.block.kind == "paragraph": Rich {
                 text: root.block.text;
                 link-clicked(url) => { root.link-clicked(url); }
             }
-        }
 
-        if root.block.kind == "task": HorizontalLayout {
-            padding-left: root.block.indent * 22px;
-            spacing: 10px;
-            VerticalLayout {
-                padding-top: 3px;
-                alignment: start;
+            if root.block.kind == "quote": HorizontalLayout {
+                spacing: 12px;
                 Rectangle {
-                    width: 16px;
-                    height: 16px;
-                    border-radius: 4px;
-                    background: root.block.checked ? Theme.accent : box-touch.has-hover ? Theme.hover : transparent;
-                    border-width: root.block.checked ? 0 : 1.5px;
-                    border-color: Theme.muted;
-                    animate background { duration: 120ms; }
-
-                    if root.block.checked: Icon {
-                        width: 12px;
-                        height: 12px;
-                        commands: Icons.check;
-                        stroke: Theme.on-accent;
-                        stroke-width: 1.8px;
-                    }
-
-                    box-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.toggle-task(root.block.line); }
-                    }
+                    width: 3px;
+                    border-radius: 1.5px;
+                    background: Theme.accent.with-alpha(0.7);
+                }
+                Rich {
+                    text: root.block.text;
+                    default-color: Theme.ink-soft;
+                    link-clicked(url) => { root.link-clicked(url); }
                 }
             }
-            Rich {
-                text: root.block.text;
-                default-color: root.block.checked ? Theme.muted : Theme.ink;
-                link-clicked(url) => { root.link-clicked(url); }
-            }
-        }
 
-        if root.block.kind == "code": Rectangle {
-            border-radius: 8px;
-            background: Theme.hover;
-            border-width: 1px;
-            border-color: Theme.rule;
-
-            // One highlighted line per cell.
-            VerticalLayout {
-                padding: 12px;
-                spacing: 1px;
-                for line in root.block.cells: Rich {
-                    text: line;
-                    default-font-family: "JetBrains Mono";
-                    default-font-size: 13.5px * Theme.text-scale;
-                }
-            }
-        }
-
-        if root.block.kind == "callout": callout := Rectangle {
-            property <color> tone: [#0090ff, #46a758, #8e4ec6, #f5b70a, #e5484d][Math.max(0, root.block.level - 1)];
-            border-radius: root.block.marker != "" ? 8px : 0;
-            background: self.tone.with-alpha(0.1);
-
-            Rectangle {
-                x: 0;
-                width: 3px;
-                background: callout.tone;
-            }
-
-            VerticalLayout {
-                padding: 12px;
-                padding-left: 16px;
-                spacing: 4px;
-                if root.block.marker != "": Text {
+            if root.block.kind == "item": HorizontalLayout {
+                padding-left: root.block.indent * 22px;
+                spacing: 8px;
+                Text {
+                    width: 18px;
                     text: root.block.marker;
-                    color: callout.tone;
-                    font-size: 13px * Theme.text-scale;
-                    font-weight: 700;
+                    color: Theme.muted;
+                    font-family: Theme.font;
+                    font-size: 16px;
+                    horizontal-alignment: right;
                 }
                 Rich {
                     text: root.block.text;
                     link-clicked(url) => { root.link-clicked(url); }
                 }
             }
-        }
 
-        if root.block.kind == "footnote": HorizontalLayout {
-            spacing: 6px;
-            Text {
-                width: 22px;
-                horizontal-alignment: right;
-                text: root.block.marker + ".";
-                color: Theme.muted;
-                font-size: 13px * Theme.text-scale;
+            if root.block.kind == "task": HorizontalLayout {
+                padding-left: root.block.indent * 22px;
+                spacing: 10px;
+                VerticalLayout {
+                    padding-top: 3px;
+                    alignment: start;
+                    Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 4px;
+                        background: root.block.checked ? Theme.accent : box-touch.has-hover ? Theme.hover : transparent;
+                        border-width: root.block.checked ? 0 : 1.5px;
+                        border-color: Theme.muted;
+                        animate background { duration: 120ms; }
+
+                        if root.block.checked: Icon {
+                            width: 12px;
+                            height: 12px;
+                            commands: Icons.check;
+                            stroke: Theme.on-accent;
+                            stroke-width: 1.8px;
+                        }
+
+                        box-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle-task(root.block.line); }
+                        }
+                    }
+                }
+                Rich {
+                    text: root.block.text;
+                    default-color: root.block.checked ? Theme.muted : Theme.ink;
+                    link-clicked(url) => { root.link-clicked(url); }
+                }
             }
-            Rich {
-                text: root.block.text;
-                default-font-size: 13px * Theme.text-scale;
-                default-color: Theme.ink-soft;
-                link-clicked(url) => { root.link-clicked(url); }
+
+            if root.block.kind == "code": Rectangle {
+                border-radius: 8px;
+                background: Theme.hover;
+                border-width: 1px;
+                border-color: Theme.rule;
+
+                // One highlighted line per cell.
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 1px;
+                    for line in root.block.cells: Rich {
+                        text: line;
+                        default-font-family: "JetBrains Mono";
+                        default-font-size: 13.5px * Theme.text-scale;
+                    }
+                }
+            }
+
+            if root.block.kind == "callout": callout := Rectangle {
+                property <color> tone: [#0090ff, #46a758, #8e4ec6, #f5b70a, #e5484d][Math.max(0, root.block.level - 1)];
+                border-radius: root.block.marker != "" ? 8px : 0;
+                background: self.tone.with-alpha(0.1);
+
+                Rectangle {
+                    x: 0;
+                    width: 3px;
+                    background: callout.tone;
+                }
+
+                VerticalLayout {
+                    padding: 12px;
+                    padding-left: 16px;
+                    spacing: 4px;
+                    if root.block.marker != "": Text {
+                        text: root.block.marker;
+                        color: callout.tone;
+                        font-size: 13px * Theme.text-scale;
+                        font-weight: 700;
+                    }
+                    Rich {
+                        text: root.block.text;
+                        link-clicked(url) => { root.link-clicked(url); }
+                    }
+                }
+            }
+
+            if root.block.kind == "footnote": HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    width: 22px;
+                    horizontal-alignment: right;
+                    text: root.block.marker + ".";
+                    color: Theme.muted;
+                    font-size: 13px * Theme.text-scale;
+                }
+                Rich {
+                    text: root.block.text;
+                    default-font-size: 13px * Theme.text-scale;
+                    default-color: Theme.ink-soft;
+                    link-clicked(url) => { root.link-clicked(url); }
+                }
+            }
+
+            if root.block.kind == "rule": VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.rule;
+                }
+            }
+
+            if root.block.kind == "row": Rectangle {
+                background: root.block.level == 1 ? Theme.hover : transparent;
+                border-width: 1px;
+                border-color: Theme.rule;
+
+                HorizontalLayout {
+                    for cell in root.block.cells: Rectangle {
+                        // Equal columns regardless of content.
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        preferred-width: 0px;
+                        border-width: 0.5px;
+                        border-color: Theme.rule;
+                        HorizontalLayout {
+                            padding: 8px;
+                            Rich {
+                                text: cell;
+                                default-font-size: 14px;
+                                link-clicked(url) => { root.link-clicked(url); }
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
 
-        if root.block.kind == "rule": VerticalLayout {
-            padding-top: 6px;
-            padding-bottom: 6px;
-            Rectangle {
+    // While the pointer rests on the block, report where it is (the app checks it is on a link).
+    Timer {
+        interval: 300ms;
+        running: hover.enabled && hover.has-hover;
+        triggered => {
+            root.link-hover(root.block.note-links, hover.absolute-position.x + hover.mouse-x, hover.absolute-position.y + hover.mouse-y);
+        }
+    }
+}
+// Card listing the notes a hovered block links to; the app places it.
+export component LinkPreviewCard inherits Rectangle {
+    in property <[LinkPreview]> previews;
+
+    height: list.preferred-height;
+    border-radius: 10px;
+    background: Theme.popover;
+    border-width: 1px;
+    border-color: Theme.rule;
+    drop-shadow-blur: 18px;
+    drop-shadow-offset-y: 6px;
+    drop-shadow-color: #00000035;
+
+    list := VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        for preview[i] in root.previews: VerticalLayout {
+            spacing: 8px;
+
+            if i > 0: Rectangle {
                 height: 1px;
                 background: Theme.rule;
             }
-        }
 
-        if root.block.kind == "row": Rectangle {
-            background: root.block.level == 1 ? Theme.hover : transparent;
-            border-width: 1px;
-            border-color: Theme.rule;
+            VerticalLayout {
+                spacing: 3px;
 
-            HorizontalLayout {
-                for cell in root.block.cells: Rectangle {
-                    // Equal columns regardless of content.
-                    horizontal-stretch: 1;
-                    min-width: 0px;
-                    preferred-width: 0px;
-                    border-width: 0.5px;
-                    border-color: Theme.rule;
-                    HorizontalLayout {
-                        padding: 8px;
-                        Rich {
-                            text: cell;
-                            default-font-size: 14px;
-                            link-clicked(url) => { root.link-clicked(url); }
-                        }
+                HorizontalLayout {
+                    spacing: 6px;
+                    if preview.emoji != "": Text {
+                        text: preview.emoji;
+                        font-family: "Segoe UI Emoji";
+                        font-size: 13px;
+                        color: Theme.ink-soft;
                     }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: preview.title;
+                        overflow: elide;
+                        color: Theme.ink;
+                        font-size: 13px;
+                        font-weight: 600;
+                    }
+                }
+
+                // An explicit width, so the wrapped height is known to the layout.
+                Text {
+                    width: root.width - 24px;
+                    text: preview.missing ? "No note with this name yet. Click to create it."
+                        : preview.snippet == "" ? "Empty note" : preview.snippet;
+                    wrap: word-wrap;
+                    color: Theme.muted;
+                    font-size: 12px;
                 }
             }
         }

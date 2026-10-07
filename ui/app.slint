@@ -16,11 +16,11 @@ import { Theme } from "theme.slint";
 import { FormatButton, Icon, IconButton, Icons, ResizeEdge, TrafficLight } from "widgets.slint";
 import { NoteRow, Sidebar, TagRow } from "sidebar.slint";
 import { Editor, LinkRow, Suggestion } from "editor.slint";
-import { MdBlock } from "markdown.slint";
+import { LinkPreview, LinkPreviewCard, MdBlock } from "markdown.slint";
 import { ReminderPopover, ReminderRow, Toast } from "reminders.slint";
-import { SettingsPopover } from "settings.slint";
+import { SettingsPopover, SettingsWindow } from "settings.slint";
 import { Presentation } from "present.slint";
-import { ShortcutsPopover, ShortcutRow } from "shortcuts.slint";
+import { ShortcutRow } from "shortcuts.slint";
 import { PaletteItem, QuickSwitcher } from "palette.slint";
 import { CalendarDay, CalendarPopover } from "calendar.slint";
 import { StatCell, StatSummary, StatsPopover } from "stats.slint";
@@ -29,11 +29,11 @@ import { CaptureWindow } from "capture.slint";
 import { LookupRow, SpellRow, WordsPanel } from "words.slint";
 import { TaskRow, TasksPopover } from "tasks.slint";
 
-export { NoteRow, ReminderRow, MdBlock, Suggestion, Theme, TagRow, LinkRow, PaletteItem, CalendarDay, StatCell, StatSummary, StickyWindow, CaptureWindow, SpellRow, LookupRow, TaskRow, ShortcutRow }
+export { NoteRow, ReminderRow, MdBlock, LinkPreview, Suggestion, Theme, TagRow, LinkRow, PaletteItem, CalendarDay, StatCell, StatSummary, StickyWindow, CaptureWindow, SpellRow, LookupRow, TaskRow, ShortcutRow }
 
 // The tray icon keeps Zima (and its reminders) running when the window is closed.
 export component TrayIcon inherits SystemTrayIcon {
-    icon: @image-url("icon.svg");
+    icon: @image-url("icon.png");
     tooltip: "Zima";
 
     callback open();
@@ -96,7 +96,7 @@ component ModeButton {
 
 export component AppWindow inherits Window {
     title: "Zima";
-    icon: @image-url("icon.svg");
+    icon: @image-url("icon.png");
     no-frame: true;
     preferred-width: 1100px;
     preferred-height: 720px;
@@ -114,8 +114,16 @@ export component AppWindow inherits Window {
     in property <[NoteRow]> bin-notes;
     in property <[NoteRow]> pinned-notes;
     in property <[NoteRow]> archived-notes;
+    // 0 = last changed first, 1 = title A to Z, 2 = newest created first.
+    in property <int> note-order;
+    // Notes picked with Ctrl+click.
+    in property <int> selected-count;
     in property <[TagRow]> tags;
     in property <[LinkRow]> backlinks;
+    // Card shown while hovering a [[link]] in the preview, at this window position.
+    in property <[LinkPreview]> link-previews;
+    in property <length> link-preview-x;
+    in property <length> link-preview-y;
     in-out property <string> search-text;
     // Quick switcher
     in-out property <bool> palette-open;
@@ -191,9 +199,14 @@ export component AppWindow inherits Window {
     // Reminders, settings, toasts
     in property <[ReminderRow]> reminders;
     in-out property <bool> reminders-open;
+    // The quick settings under the gear button.
     in-out property <bool> settings-open;
+    // The full settings window, and the page it shows.
+    in-out property <bool> settings-window-open;
+    in-out property <string> settings-page: "appearance";
     in-out property <bool> launch-at-login;
     in-out property <bool> software-rendering;
+    in-out property <bool> close-to-tray;
     in property <[string]> toast-actions;
     // Writing helpers
     in property <int> note-goal;
@@ -218,6 +231,11 @@ export component AppWindow inherits Window {
     callback toggle-favorite(string);
     callback toggle-pin(string);
     callback toggle-archive(string);
+    callback set-note-order(int);
+    callback select-note(string);
+    // "pin", "favorite", "archive" or "bin", for every selected note.
+    callback bulk-action(string);
+    callback clear-selection();
     callback duplicate-note(string);
     callback open-sticky(string);
     callback set-color(string, int);
@@ -230,11 +248,9 @@ export component AppWindow inherits Window {
     callback run-command(string);
     // A key combination like "Ctrl+Shift+K"; true if a command used it.
     callback handle-shortcut(string) -> bool;
-    in-out property <bool> shortcuts-open;
     in property <[ShortcutRow]> shortcut-rows;
     callback set-shortcut(string, string);
     callback reset-shortcut(string);
-    callback open-shortcuts();
     // Presentation mode
     in property <bool> presenting;
     in property <[MdBlock]> slide-blocks;
@@ -274,6 +290,9 @@ export component AppWindow inherits Window {
     callback apply-search(string);
     callback open-on-this-day();
     callback move-to-notebook(string);
+    callback pick-emoji(string);
+    callback link-hover([string], length, length);
+    callback link-hover-end();
     callback task-toggle(string, int);
     callback task-open(string, int);
     callback tasks-show-done-changed(bool);
@@ -298,9 +317,11 @@ export component AppWindow inherits Window {
     callback set-format-bar(bool);
     callback set-launch-at-login(bool);
     callback set-software-rendering(bool);
+    callback set-close-to-tray(bool);
     callback export-note();
     callback import-zima();
     callback open-notes-folder();
+    callback open-backups-folder();
     callback indent(bool);
     // Return true if they handled the key (it's then swallowed).
     callback auto-pair(string) -> bool;
@@ -339,6 +360,17 @@ export component AppWindow inherits Window {
 
     function f-key(event: KeyEvent) -> string {
         return event.text == Key.F1 ? "F1" : event.text == Key.F2 ? "F2" : event.text == Key.F3 ? "F3" : event.text == Key.F4 ? "F4" : event.text == Key.F5 ? "F5" : event.text == Key.F6 ? "F6" : event.text == Key.F7 ? "F7" : event.text == Key.F8 ? "F8" : event.text == Key.F9 ? "F9" : event.text == Key.F10 ? "F10" : event.text == Key.F11 ? "F11" : event.text == Key.F12 ? "F12" : "";
+    }
+
+    // Open the settings window on `page` (a page id like "shortcuts"), or where it was left if "".
+    public function open-settings(page: string) {
+        root.settings-open = false;
+        root.reminders-open = false;
+        root.calendar-open = false;
+        if (page != "") {
+            root.settings-page = page;
+        }
+        root.settings-window-open = true;
     }
 
     public function focus-default() {
@@ -460,8 +492,8 @@ export component AppWindow inherits Window {
                     root.find-closed();
                     return accept;
                 }
-                if (root.shortcuts-open) {
-                    root.shortcuts-open = false;
+                if (root.settings-window-open) {
+                    root.settings-window-open = false;
                     return accept;
                 }
                 if (root.settings-open || root.reminders-open || root.calendar-open || root.stats-open || root.tasks-open) {
@@ -565,6 +597,12 @@ export component AppWindow inherits Window {
                     search-text <=> root.search-text;
                     toggle-pin(id) => { root.toggle-pin(id); }
                     toggle-archive(id) => { root.toggle-archive(id); }
+                    note-order: root.note-order;
+                    set-note-order(order) => { root.set-note-order(order); }
+                    selected-count: root.selected-count;
+                    select-note(id) => { root.select-note(id); }
+                    bulk-action(action) => { root.bulk-action(action); }
+                    clear-selection => { root.clear-selection(); }
                     duplicate-note(id) => { root.duplicate-note(id); }
                     open-sticky(id) => { root.open-sticky(id); }
                     set-color(id, c) => { root.set-color(id, c); }
@@ -584,6 +622,7 @@ export component AppWindow inherits Window {
                     apply-search(query) => { root.apply-search(query); }
                     open-on-this-day => { root.open-on-this-day(); }
                     move-to-notebook(id) => { root.move-to-notebook(id); }
+                    pick-emoji(id) => { root.pick-emoji(id); }
                     show-active: root.show-active;
                     show-favorites: root.show-favorites;
                     show-recent: root.show-recent;
@@ -930,6 +969,8 @@ export component AppWindow inherits Window {
                     new-note => { root.new-note(); }
                     toggle-task(line) => { root.toggle-task(line); }
                     link-clicked(url) => { root.link-clicked(url); }
+                    link-hover(titles, x, y) => { root.link-hover(titles, x, y); }
+                    link-hover-end => { root.link-hover-end(); }
                     note-goal: root.note-goal;
                     typewriter: root.typewriter && root.zen;
                     spotlight: root.spotlight && root.zen;
@@ -946,6 +987,14 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Hover card for [[links]]: below the pointer, or above it near the bottom; kept inside the window.
+    if root.link-previews.length > 0: LinkPreviewCard {
+        previews: root.link-previews;
+        width: min(300px, root.width - 16px);
+        x: max(8px, min(root.link-preview-x - 16px, root.width - self.width - 8px));
+        y: root.link-preview-y + 22px + self.height <= root.height - 8px ? root.link-preview-y + 22px : max(8px, root.link-preview-y - self.height - 10px);
     }
 
     // Popovers; clicking anywhere else closes them.
@@ -1050,50 +1099,75 @@ export component AppWindow inherits Window {
         limit-height: root.height - root.bar-height - 16px;
         wide <=> root.wide;
         zen <=> root.zen;
-        typewriter <=> root.typewriter;
-        launch-at-login <=> root.launch-at-login;
-        software-rendering <=> root.software-rendering;
-        set-software-rendering(on) => { root.set-software-rendering(on); }
-        set-typewriter(on) => { root.set-typewriter(on); }
-        has-note: root.has-note;
         set-theme(index) => { root.set-theme(index); }
         set-accent(hex) => { root.set-accent(hex); }
-        clip-token: root.clip-token;
-        copy-clip-token => { root.copy-clip-token(); }
-        sync-location: root.sync-location;
-        sync-active: root.sync-active;
-        google-drive-path: root.google-drive-path;
-        use-google-drive => { root.settings-open = false; root.use-google-drive(); }
-        choose-sync-folder => { root.settings-open = false; root.choose-sync-folder(); }
-        stop-syncing => { root.settings-open = false; root.stop-syncing(); }
-        import-markdown-folder => { root.settings-open = false; root.import-markdown-folder(); }
-        export-all => { root.settings-open = false; root.export-all(); }
-        spotlight <=> root.spotlight;
         zoom(step) => { root.zoom(step); }
         set-line-spacing(value) => { root.set-line-spacing(value); }
-        step-ui-scale(step) => { root.step-ui-scale(step); }
-        set-spotlight(on) => { root.set-spotlight(on); }
-        set-font(font) => { root.set-font(font); }
-        set-transparency(value) => { root.set-transparency(value); }
         set-wide(on) => { root.set-wide(on); }
         set-zen(on) => { root.settings-open = false; }
-        set-launch-at-login(on) => { root.set-launch-at-login(on); }
-        export-note => { root.settings-open = false; root.export-note(); }
-        import-zima => { root.settings-open = false; root.import-zima(); }
-        open-notes-folder => { root.settings-open = false; root.open-notes-folder(); }
-        open-shortcuts => { root.open-shortcuts(); }
-        edit-theme => { root.settings-open = false; root.run-command("edit-theme"); }
+        open-all => { root.open-settings(""); }
     }
 
-    if root.shortcuts-open: ShortcutsPopover {
-        x: (root.width - self.width) / 2;
-        y: root.bar-height + 20px;
-        limit-height: root.height - root.bar-height - 40px;
-        rows: root.shortcut-rows;
-        set-shortcut(id, combo) => { root.set-shortcut(id, combo); }
-        reset-shortcut(id) => { root.reset-shortcut(id); }
-        filter-edited(text) => { root.shortcut-filter-edited(text); }
-        close => { root.shortcuts-open = false; root.focus-default(); }
+    // Settings window, centred over a dimmed window.
+    if root.settings-window-open: Rectangle {
+        background: #00000040;
+        TouchArea {
+            clicked => {
+                root.settings-window-open = false;
+                root.focus-default();
+            }
+        }
+        SettingsWindow {
+            width: min(780px, parent.width - 48px);
+            height: min(600px, parent.height - root.bar-height - 32px);
+            x: (parent.width - self.width) / 2;
+            y: max(root.bar-height, (parent.height - self.height) / 2);
+            page <=> root.settings-page;
+            wide <=> root.wide;
+            zen <=> root.zen;
+            typewriter <=> root.typewriter;
+            spotlight <=> root.spotlight;
+            launch-at-login <=> root.launch-at-login;
+            software-rendering <=> root.software-rendering;
+            close-to-tray <=> root.close-to-tray;
+            has-note: root.has-note;
+            clip-token: root.clip-token;
+            sync-location: root.sync-location;
+            sync-active: root.sync-active;
+            google-drive-path: root.google-drive-path;
+            shortcut-rows: root.shortcut-rows;
+            set-theme(index) => { root.set-theme(index); }
+            set-accent(hex) => { root.set-accent(hex); }
+            set-font(font) => { root.set-font(font); }
+            set-transparency(value) => { root.set-transparency(value); }
+            zoom(step) => { root.zoom(step); }
+            set-line-spacing(value) => { root.set-line-spacing(value); }
+            step-ui-scale(step) => { root.step-ui-scale(step); }
+            set-wide(on) => { root.set-wide(on); }
+            set-typewriter(on) => { root.set-typewriter(on); }
+            set-spotlight(on) => { root.set-spotlight(on); }
+            set-close-to-tray(on) => { root.set-close-to-tray(on); }
+            set-launch-at-login(on) => { root.set-launch-at-login(on); }
+            set-software-rendering(on) => { root.set-software-rendering(on); }
+            use-google-drive => { root.use-google-drive(); }
+            choose-sync-folder => { root.choose-sync-folder(); }
+            stop-syncing => { root.stop-syncing(); }
+            export-all => { root.export-all(); }
+            import-markdown-folder => { root.import-markdown-folder(); }
+            export-note => { root.export-note(); }
+            import-zima => { root.import-zima(); }
+            open-notes-folder => { root.open-notes-folder(); }
+            open-backups-folder => { root.open-backups-folder(); }
+            copy-clip-token => { root.copy-clip-token(); }
+            set-shortcut(id, combo) => { root.set-shortcut(id, combo); }
+            reset-shortcut(id) => { root.reset-shortcut(id); }
+            shortcut-filter-edited(text) => { root.shortcut-filter-edited(text); }
+            run-command(id) => { root.run-command(id); }
+            close => {
+                root.settings-window-open = false;
+                root.focus-default();
+            }
+        }
     }
 
     if root.presenting: Presentation {

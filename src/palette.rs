@@ -84,11 +84,15 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "random", title: "Random note", shortcut: "" },
     Command { id: "on-this-day", title: "On this day", shortcut: "" },
     Command { id: "notebook", title: "Move this note to a notebook\u{2026}", shortcut: "" },
+    Command { id: "emoji", title: "Set this note's emoji\u{2026}", shortcut: "" },
     Command { id: "save-search", title: "Save the current search", shortcut: "" },
     Command { id: "spell", title: "Check spelling", shortcut: "F7" },
     Command { id: "lookup", title: "Look up word (definition)", shortcut: "Ctrl+Shift+L" },
     Command { id: "history", title: "Version history of this note", shortcut: "" },
-    Command { id: "settings", title: "Settings", shortcut: "" },
+    Command { id: "sort-changed", title: "Sort notes: last changed first", shortcut: "" },
+    Command { id: "sort-title", title: "Sort notes: by title (A to Z)", shortcut: "" },
+    Command { id: "sort-created", title: "Sort notes: newest created first", shortcut: "" },
+    Command { id: "settings", title: "Settings", shortcut: "Ctrl+," },
     Command { id: "theme-0", title: "Theme: System", shortcut: "" },
     Command { id: "theme-1", title: "Theme: Light", shortcut: "" },
     Command { id: "theme-2", title: "Theme: Dark", shortcut: "" },
@@ -120,6 +124,7 @@ pub const COMMANDS: &[Command] = &[
     Command { id: "google-drive", title: "Sync notes with Google Drive", shortcut: "" },
     Command { id: "sync-folder", title: "Sync notes with a folder\u{2026} (OneDrive, Dropbox\u{2026})", shortcut: "" },
     Command { id: "backup", title: "Back up now", shortcut: "" },
+    Command { id: "open-backups", title: "Open backups folder", shortcut: "" },
     Command { id: "open-folder", title: "Open notes folder", shortcut: "" },
     Command { id: "quit", title: "Quit Zima", shortcut: "" },
 ];
@@ -142,5 +147,34 @@ mod tests {
             fuzzy_score("notebook", "Move this note to a notebook").unwrap()
                 > fuzzy_score("notebook", "This note's font: Book").unwrap()
         );
+    }
+
+    fn default_shortcut(id: &str) -> &'static str {
+        COMMANDS.iter().find(|c| c.id == id).map(|c| c.shortcut).unwrap()
+    }
+
+    #[test]
+    fn settings_window_opens_with_ctrl_comma() {
+        assert_eq!(default_shortcut("settings"), "Ctrl+,");
+        // The shortcuts page has no key of its own; it's reached from Settings or Ctrl+K.
+        assert_eq!(default_shortcut("shortcuts"), "");
+    }
+
+    #[test]
+    fn default_shortcuts_are_unique() {
+        let mut seen: Vec<String> = Vec::new();
+        for command in COMMANDS.iter().filter(|c| !c.shortcut.is_empty()) {
+            let combo = command.shortcut.to_lowercase();
+            assert!(!seen.contains(&combo), "{} is used twice", command.shortcut);
+            seen.push(combo);
+        }
+    }
+
+    #[test]
+    fn command_ids_are_unique() {
+        // Ids are the keys of saved custom shortcuts, so two commands must never share one.
+        for (i, command) in COMMANDS.iter().enumerate() {
+            assert!(COMMANDS[i + 1..].iter().all(|c| c.id != command.id), "{} is used twice", command.id);
+        }
     }
 }

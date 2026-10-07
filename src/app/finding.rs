@@ -38,6 +38,10 @@ impl App {
         self.open_palette(PaletteMode::Notebook(id));
     }
 
+    pub fn pick_emoji(&mut self, id: NoteId) {
+        self.open_palette(PaletteMode::Emoji(id));
+    }
+
     pub fn set_notebook(&mut self, id: NoteId, notebook: Option<String>) {
         let Some(note) = self.find_mut(id) else { return };
         note.notebook = notebook.clone();

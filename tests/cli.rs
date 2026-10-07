@@ -161,3 +161,19 @@ fn remind_without_a_time_fails_and_writes_nothing() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("couldn't tell when"));
     assert!(!data.path().join("reminders.json").exists());
 }
+
+#[test]
+fn add_keeps_existing_note_emoji() {
+    let data = DataDir::new("add-emoji");
+    // One note saved before emoji existed (no "emoji" key) and one with an emoji.
+    std::fs::write(data.path().join("index.json"), r#"[{"id":1,"title":"old","modified":5},{"id":2,"title":"party","emoji":"🎉","modified":6}]"#).unwrap();
+    let output = data.zima(&["add", "new"]);
+    assert!(output.status.success(), "{output:?}");
+
+    let index = data.json("index.json");
+    let notes = index.as_array().unwrap();
+    assert_eq!(notes.len(), 3);
+    let by_id = |id: i64| notes.iter().find(|n| n["id"] == id).unwrap();
+    assert_eq!(by_id(2)["emoji"], "🎉");
+    assert!(by_id(1)["emoji"].is_null());
+}

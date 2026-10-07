@@ -1,11 +1,13 @@
-//! Pinning, archiving, colours, duplicate/merge, daily notes, templates, tags, links, calendar.
+//! Pinning, archiving, colours, emoji, duplicate/merge, daily notes, templates, tags, links, calendar.
 
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+use std::cmp::Reverse;
+
 use super::{App, display_title};
 use crate::model::{Note, NoteId, now_ms};
-use crate::{CalendarDay, LinkRow, TagRow, Theme};
+use crate::{CalendarDay, LinkPreview, LinkRow, TagRow, Theme};
 
 /// Notes in the Bin longer than this are deleted for good.
 const BIN_DAYS: i64 = 30;
@@ -17,6 +19,62 @@ impl App {
         self.index_dirty = true;
         self.flush();
         self.refresh_lists();
+    }
+
+    /// Sort the note lists (see `UiState::note_order`). Recent always stays by last change.
+    pub fn set_note_order(&mut self, order: i32) {
+        self.state.note_order = order.clamp(0, 2);
+        self.save_state();
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_note_order(self.state.note_order);
+        }
+        self.refresh_lists();
+    }
+
+    /// Ctrl+click in the sidebar: add a note to the selection, or take it out.
+    pub fn toggle_selected(&mut self, id: NoteId) {
+        if let Some(at) = self.selected.iter().position(|&s| s == id) {
+            self.selected.remove(at);
+        } else if self.find(id).is_some_and(Note::is_live) {
+            self.selected.push(id);
+        }
+        self.refresh_lists();
+    }
+
+    pub fn clear_selection(&mut self) {
+        if !self.selected.is_empty() {
+            self.selected.clear();
+            self.refresh_lists();
+        }
+    }
+
+    /// Pin, favourite, archive or bin every selected note at once (see [`apply_bulk`]).
+    pub fn bulk(&mut self, action: &str) {
+        let Some(action) = Bulk::from_name(action) else { return };
+        let ids = std::mem::take(&mut self.selected);
+        let changed = apply_bulk(&mut self.notes, &ids, action, now_ms());
+        if changed.is_empty() {
+            self.refresh_lists();
+            return;
+        }
+        self.index_dirty = true;
+        self.flush();
+        // Notes that left the main lists also leave Active, like closing them one by one.
+        for &id in &changed {
+            if !self.find(id).is_some_and(Note::is_listed) {
+                self.close(id);
+            }
+        }
+        self.refresh_lists();
+        let count = changed.len();
+        let notes = if count == 1 { "1 note".to_string() } else { format!("{count} notes") };
+        match action {
+            Bulk::Bin => self.toast(&format!("Moved {notes} to the Bin."), false),
+            Bulk::Archive if self.find(changed[0]).is_some_and(|n| n.archived) => {
+                self.toast(&format!("Archived {notes}. Find them in the Archive section."), false)
+            }
+            _ => {}
+        }
     }
 
     pub fn toggle_archive(&mut self, id: NoteId) {
@@ -36,6 +94,15 @@ impl App {
     pub fn set_color(&mut self, id: NoteId, color: Option<u8>) {
         let Some(note) = self.find_mut(id) else { return };
         note.color = color;
+        self.index_dirty = true;
+        self.flush();
+        self.refresh_lists();
+        self.sync_sticky(id);
+    }
+
+    pub fn set_emoji(&mut self, id: NoteId, emoji: Option<String>) {
+        let Some(note) = self.find_mut(id) else { return };
+        note.emoji = emoji.as_deref().and_then(crate::emoji::clean);
         self.index_dirty = true;
         self.flush();
         self.refresh_lists();
@@ -187,11 +254,8 @@ impl App {
         let Some(ui) = self.ui.upgrade() else { return };
         let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
         for note in self.notes.iter().filter(|n| n.is_listed()) {
-            let mut seen = std::collections::HashSet::new();
-            for tag in extract_tags(&note.body) {
-                if seen.insert(tag.to_lowercase()) {
-                    *counts.entry(tag.to_lowercase()).or_default() += 1;
-                }
+            for tag in &self.summary(note).tags {
+                *counts.entry(tag.clone()).or_default() += 1;
             }
         }
         let rows: Vec<TagRow> = counts.into_iter().map(|(name, count)| TagRow { name: name.into(), count: count as i32 }).collect();
@@ -203,12 +267,7 @@ impl App {
     /// `[[Title]]` clicked: open that note, or create it.
     pub fn open_link(&mut self, title: &str) {
         let title = title.trim();
-        let existing = self
-            .notes
-            .iter()
-            .filter(|n| n.is_live())
-            .find(|n| display_title(n).eq_ignore_ascii_case(title) || n.title.trim().eq_ignore_ascii_case(title))
-            .map(|n| n.id);
+        let existing = link_target(&self.notes, title).map(|n| n.id);
         match existing {
             Some(id) => {
                 if self.find(id).is_some_and(|n| n.archived) {
@@ -227,6 +286,37 @@ impl App {
                     ui.invoke_focus_body();
                 }
             }
+        }
+    }
+
+    /// The pointer rests on a link in a preview block that links to `titles`: show a card for them.
+    pub fn link_hover(&mut self, titles: Vec<String>, x: f32, y: f32) {
+        if !crate::system::pointer_on_link() {
+            self.hide_link_preview();
+            return;
+        }
+        if titles == self.link_preview {
+            return;
+        }
+        let previews: Vec<LinkPreview> = link_previews(&self.notes, &titles)
+            .into_iter()
+            .map(|p| LinkPreview { title: p.title.into(), snippet: p.snippet.into(), missing: p.missing, emoji: p.emoji.into() })
+            .collect();
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_link_previews(ModelRc::new(VecModel::from(previews)));
+            ui.set_link_preview_x(x);
+            ui.set_link_preview_y(y);
+        }
+        self.link_preview = titles;
+    }
+
+    pub fn hide_link_preview(&mut self) {
+        if self.link_preview.is_empty() {
+            return;
+        }
+        self.link_preview.clear();
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_link_previews(ModelRc::default());
         }
     }
 
@@ -319,6 +409,44 @@ impl App {
     }
 }
 
+/// The live note a `[[title]]` points to: its title (or first line, if untitled), ignoring case.
+pub fn link_target<'a>(notes: &'a [Note], title: &str) -> Option<&'a Note> {
+    let title = title.trim();
+    notes.iter().filter(|n| n.is_live()).find(|n| display_title(n).eq_ignore_ascii_case(title) || n.title.trim().eq_ignore_ascii_case(title))
+}
+
+/// Most notes shown in one link hover card.
+const MAX_LINK_PREVIEWS: usize = 3;
+
+/// What the hover card shows for one linked note.
+pub struct LinkPreviewData {
+    pub title: String,
+    pub snippet: String,
+    /// No note has this title yet (clicking the link would create it).
+    pub missing: bool,
+    pub emoji: String,
+}
+
+/// Card entries for the linked `titles` (at most three), looked up in `notes`.
+pub fn link_previews(notes: &[Note], titles: &[String]) -> Vec<LinkPreviewData> {
+    titles
+        .iter()
+        .take(MAX_LINK_PREVIEWS)
+        .map(|title| match link_target(notes, title) {
+            Some(note) => {
+                let name = display_title(note);
+                LinkPreviewData {
+                    snippet: crate::markdown::plain_snippet(&note.body, &name, 3, 220),
+                    title: name,
+                    missing: false,
+                    emoji: note.emoji.as_deref().and_then(crate::emoji::clean).unwrap_or_default(),
+                }
+            }
+            None => LinkPreviewData { title: title.clone(), snippet: String::new(), missing: true, emoji: String::new() },
+        })
+        .collect()
+}
+
 /// `#tags` in a note: `#` at a word start, then a letter, then letters, digits, `-`, `_` or `/`.
 /// Headings (`# Title`) aren't tags because of the space.
 pub fn extract_tags(body: &str) -> Vec<String> {
@@ -388,6 +516,64 @@ pub fn checklist_progress(body: &str) -> String {
     if total == 0 { String::new() } else { format!("{done}/{total}") }
 }
 
+/// Something done to every selected note at once.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Bulk {
+    Pin,
+    Favorite,
+    Archive,
+    Bin,
+}
+
+impl Bulk {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "pin" => Some(Self::Pin),
+            "favorite" => Some(Self::Favorite),
+            "archive" => Some(Self::Archive),
+            "bin" => Some(Self::Bin),
+            _ => None,
+        }
+    }
+}
+
+/// Apply `action` to the notes in `ids` that are still around and not in the Bin. Pin, favourite and
+/// archive work like a switch for the whole group: if every note already has it, it's taken off all
+/// of them, otherwise it's put on all of them. Returns the notes that changed.
+pub fn apply_bulk(notes: &mut [Note], ids: &[NoteId], action: Bulk, now: i64) -> Vec<NoteId> {
+    fn flag(n: &mut Note, action: Bulk) -> Option<&mut bool> {
+        match action {
+            Bulk::Pin => Some(&mut n.pinned),
+            Bulk::Favorite => Some(&mut n.favorite),
+            Bulk::Archive => Some(&mut n.archived),
+            Bulk::Bin => None,
+        }
+    }
+    let mut targets: Vec<&mut Note> = notes.iter_mut().filter(|n| n.is_live() && ids.contains(&n.id)).collect();
+    let on = !targets.iter_mut().all(|n| flag(n, action).is_some_and(|f| *f));
+    let mut changed = Vec::new();
+    for note in targets {
+        match flag(note, action) {
+            Some(f) if *f != on => *f = on,
+            Some(_) => continue,
+            None => note.deleted_at = Some(now),
+        }
+        changed.push(note.id);
+    }
+    changed
+}
+
+/// Put notes in the list order the user picked (see `UiState::note_order`).
+/// Notes that tie (same title, or no creation date) stay newest change first.
+pub fn sort_notes(notes: &mut [&Note], order: i32) {
+    notes.sort_by_key(|n| Reverse(n.modified));
+    match order {
+        1 => notes.sort_by_cached_key(|n| display_title(n).to_lowercase()),
+        2 => notes.sort_by_key(|n| Reverse(n.created)),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,9 +591,147 @@ mod tests {
         assert!(extract_links("[[]] and [[broken").is_empty());
     }
 
+    fn note(id: u64, title: &str, body: &str) -> Note {
+        Note { id, title: title.into(), body: body.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn link_target_matches_ignoring_case() {
+        let notes = [note(1, "Groceries", ""), note(2, "Other", "")];
+        assert_eq!(link_target(&notes, " groceries ").map(|n| n.id), Some(1));
+        assert!(link_target(&notes, "Grocer").is_none());
+    }
+
+    #[test]
+    fn link_target_uses_first_line_for_untitled() {
+        let notes = [note(1, "", "# Book ideas\nmore")];
+        assert_eq!(link_target(&notes, "book ideas").map(|n| n.id), Some(1));
+    }
+
+    #[test]
+    fn link_target_skips_binned() {
+        let mut gone = note(1, "Groceries", "");
+        gone.deleted_at = Some(5);
+        assert!(link_target(&[gone], "Groceries").is_none());
+    }
+
+    #[test]
+    fn link_previews_marks_missing() {
+        let notes = [note(1, "Groceries", "# Groceries\nmilk\neggs")];
+        let found = link_previews(&notes, &["groceries".to_string(), "Nope".to_string()]);
+        assert_eq!(found.len(), 2);
+        assert_eq!((found[0].title.as_str(), found[0].snippet.as_str(), found[0].missing), ("Groceries", "milk\neggs", false));
+        assert_eq!((found[1].title.as_str(), found[1].missing), ("Nope", true));
+    }
+
+    #[test]
+    fn link_previews_caps_at_three() {
+        let titles: Vec<String> = (0..5).map(|i| format!("n{i}")).collect();
+        let found = link_previews(&[], &titles);
+        assert_eq!(found.len(), 3);
+        assert_eq!(found[2].title, "n2");
+    }
+
+    #[test]
+    fn link_previews_empty() {
+        assert!(link_previews(&[note(1, "A", "")], &[]).is_empty());
+        let found = link_previews(&[note(1, "A", "")], &["A".to_string()]);
+        assert_eq!((found[0].snippet.as_str(), found[0].missing), ("", false));
+    }
+
     #[test]
     fn progress() {
         assert_eq!(checklist_progress("- [x] a\n- [ ] b\n  - [X] c\ntext"), "2/3");
         assert_eq!(checklist_progress("no tasks"), "");
+    }
+
+    fn ids_where(notes: &[Note], test: impl Fn(&Note) -> bool) -> Vec<NoteId> {
+        notes.iter().filter(|n| test(n)).map(|n| n.id).collect()
+    }
+
+    #[test]
+    fn bulk_pins_all_selected() {
+        let mut notes = [dated(1, "a", 0, 0), dated(2, "b", 0, 0), dated(3, "c", 0, 0)];
+        assert_eq!(apply_bulk(&mut notes, &[1, 3], Bulk::Pin, 0), vec![1, 3]);
+        assert_eq!(ids_where(&notes, |n| n.pinned), vec![1, 3]);
+    }
+
+    #[test]
+    fn bulk_switches_off_when_all_have_it() {
+        let mut notes = [dated(1, "a", 0, 0), dated(2, "b", 0, 0)];
+        notes[0].favorite = true;
+        notes[1].favorite = true;
+        apply_bulk(&mut notes, &[1, 2], Bulk::Favorite, 0);
+        assert!(ids_where(&notes, |n| n.favorite).is_empty());
+    }
+
+    #[test]
+    fn bulk_mixed_group_switches_on_and_skips_unchanged() {
+        let mut notes = [dated(1, "a", 0, 0), dated(2, "b", 0, 0)];
+        notes[0].archived = true;
+        // Only the note that wasn't archived yet changes.
+        assert_eq!(apply_bulk(&mut notes, &[1, 2], Bulk::Archive, 0), vec![2]);
+        assert_eq!(ids_where(&notes, |n| n.archived), vec![1, 2]);
+    }
+
+    #[test]
+    fn bulk_bin_and_unselected_notes() {
+        let mut notes = [dated(1, "a", 0, 0), dated(2, "b", 0, 0), dated(3, "c", 0, 0)];
+        assert_eq!(apply_bulk(&mut notes, &[2, 3], Bulk::Bin, 77), vec![2, 3]);
+        assert_eq!(notes[1].deleted_at, Some(77));
+        // The note that wasn't selected is untouched.
+        assert!(notes[0].deleted_at.is_none() && !notes[0].pinned);
+    }
+
+    #[test]
+    fn bulk_edge_cases() {
+        let mut notes = [dated(1, "a", 0, 0), dated(2, "b", 0, 0)];
+        notes[1].deleted_at = Some(5);
+        // Nothing selected, a note that's gone, and a note already in the Bin: nothing happens.
+        assert!(apply_bulk(&mut notes, &[], Bulk::Pin, 0).is_empty());
+        assert!(apply_bulk(&mut notes, &[99], Bulk::Bin, 0).is_empty());
+        assert!(apply_bulk(&mut notes, &[2], Bulk::Bin, 9).is_empty());
+        assert_eq!(notes[1].deleted_at, Some(5));
+        assert_eq!(Bulk::from_name("nope"), None);
+        assert_eq!(Bulk::from_name("bin"), Some(Bulk::Bin));
+    }
+
+    fn dated(id: NoteId, title: &str, modified: i64, created: i64) -> Note {
+        Note { id, title: title.into(), modified, created, ..Default::default() }
+    }
+
+    fn sorted(notes: &[Note], order: i32) -> Vec<NoteId> {
+        let mut list: Vec<&Note> = notes.iter().collect();
+        sort_notes(&mut list, order);
+        list.iter().map(|n| n.id).collect()
+    }
+
+    #[test]
+    fn sort_by_title_ignores_case() {
+        let notes = [dated(1, "banana", 3, 1), dated(2, "Apple", 1, 2), dated(3, "cherry", 2, 3)];
+        assert_eq!(sorted(&notes, 1), vec![2, 1, 3]);
+    }
+
+    #[test]
+    fn sort_by_created_newest_first() {
+        let notes = [dated(1, "a", 30, 100), dated(2, "b", 10, 300), dated(3, "c", 20, 200)];
+        assert_eq!(sorted(&notes, 2), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn sort_default_is_last_changed() {
+        let notes = [dated(1, "a", 10, 3), dated(2, "b", 30, 2), dated(3, "c", 20, 1)];
+        assert_eq!(sorted(&notes, 0), vec![2, 3, 1]);
+        // Anything unknown (a newer version's setting) falls back to last changed.
+        assert_eq!(sorted(&notes, 9), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn sort_ties_and_edges() {
+        // Same title, or no creation date (old notes): newest change first, and old notes last.
+        let notes = [dated(1, "Same", 10, 0), dated(2, "same", 20, 0), dated(3, "x", 5, 50)];
+        assert_eq!(sorted(&notes, 1), vec![2, 1, 3]);
+        assert_eq!(sorted(&notes, 2), vec![3, 2, 1]);
+        assert!(sorted(&[], 1).is_empty());
     }
 }

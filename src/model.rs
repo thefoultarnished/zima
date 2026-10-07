@@ -22,6 +22,8 @@ pub struct Note {
     pub archived: bool,
     /// Index into the note colour palette.
     pub color: Option<u8>,
+    /// Emoji shown before the title in the sidebar and sticky note.
+    pub emoji: Option<String>,
     /// Word goal for this note.
     pub goal: Option<u32>,
     /// The date (YYYY-MM-DD) this note is the daily note for.
@@ -102,12 +104,33 @@ pub struct UiState {
     pub saved_searches: Vec<String>,
     /// Notes popped out as sticky notes, reopened at launch.
     pub stickies: Vec<NoteId>,
+    /// Closing the window hides it to the tray (reminders keep firing). Off: closing quits Zima.
+    pub close_to_tray: bool,
     /// Whether we've told the user that closing the window keeps Zima in the tray.
     pub tray_hint_shown: bool,
     /// Rebound keyboard shortcuts: command id -> "Ctrl+Shift+K" ("" = none).
     pub shortcuts: std::collections::BTreeMap<String, String>,
     /// Draw with the CPU instead of the GPU: much less memory, less smooth animations. Read at startup.
     pub software_rendering: bool,
+    /// Where the main window was last time, so it opens there again. `None`: centred at the default size.
+    pub window: Option<WindowPlacement>,
+    /// Where the cursor was in each note (byte offset), so reopening a note goes back there.
+    /// Notes left with the cursor at the very start aren't listed.
+    pub cursors: std::collections::BTreeMap<NoteId, usize>,
+    /// Order of the note lists: 0 = last changed first, 1 = title A to Z, 2 = newest created first.
+    pub note_order: i32,
+}
+
+/// The main window's position and size in physical pixels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowPlacement {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    /// When maximized, the position and size above are the ones to go back to on un-maximize.
+    pub maximized: bool,
 }
 
 impl Default for UiState {
@@ -132,9 +155,13 @@ impl Default for UiState {
             stickies: Vec::new(),
             saved_searches: Vec::new(),
             clip_token: String::new(),
+            close_to_tray: true,
             tray_hint_shown: false,
             shortcuts: Default::default(),
             software_rendering: false,
+            window: None,
+            cursors: Default::default(),
+            note_order: 0,
         }
     }
 }
@@ -154,4 +181,40 @@ pub struct Reminder {
     /// Repeating reminders are re-scheduled instead of removed when they fire.
     #[serde(default)]
     pub repeat: Option<crate::reminders::Repeat>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn note_without_emoji_loads() {
+        let note: Note = serde_json::from_str(r#"{"id":1,"title":"x","color":2}"#).unwrap();
+        assert_eq!(note.emoji, None);
+        assert_eq!(note.color, Some(2));
+    }
+
+    #[test]
+    fn emoji_round_trips() {
+        let note = Note { id: 7, emoji: Some("\u{1F389}".into()), ..Default::default() };
+        let json = serde_json::to_string(&note).unwrap();
+        let back: Note = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.emoji.as_deref(), Some("\u{1F389}"));
+    }
+
+    #[test]
+    fn cursors_round_trip() {
+        let mut state = UiState::default();
+        state.cursors.insert(1_700_000_000_000, 42);
+        let json = serde_json::to_string(&state).unwrap();
+        let back: UiState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cursors.get(&1_700_000_000_000), Some(&42));
+    }
+
+    #[test]
+    fn state_without_cursors_loads() {
+        let state: UiState = serde_json::from_str(r#"{"theme":2}"#).unwrap();
+        assert!(state.cursors.is_empty());
+        assert_eq!(state.theme, 2);
+    }
 }

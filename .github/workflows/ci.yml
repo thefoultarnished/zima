@@ -1,0 +1,67 @@
+# Tests every push and pull request. A tag like v0.2.0 also builds the installer and attaches it
+# to a draft GitHub release, which you check and publish by hand.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The runner has no real graphics card; the CPU renderer works everywhere.
+  SLINT_BACKEND: winit-software
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Warnings are shown but don't fail the build; clippy errors do.
+      - run: cargo clippy --all-targets
+      - run: cargo test
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The installer takes its version from zima.exe, which takes it from Cargo.toml.
+      # Stop here if the tag says something else, so a release is never mislabelled.
+      - name: Check the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            Write-Error "Tag ${{ github.ref_name }} doesn't match version $version in Cargo.toml"
+            exit 1
+          }
+
+      - run: cargo build --release
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          & $iscc installer\zima.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Create a draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" (Get-Item target\installer\Zima-Setup-*.exe).FullName `
+            --draft --generate-notes --title "Zima ${{ github.ref_name }}"

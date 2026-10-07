@@ -2,13 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod backup;
 mod calc;
 mod clip;
 mod cli;
 mod commands;
+mod emoji;
 mod format;
 mod highlight;
 mod import;
+mod instance;
 mod markdown;
 mod model;
 mod palette;
@@ -43,6 +46,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let store = store::Store::open()?;
+
+    // One Zima per data folder: a second launch shows the first one's window and exits.
+    let key = instance::instance_key(store.root());
+    let wait = if args.iter().any(|a| a == instance::RESTART_ARG) { instance::RESTART_WAIT } else { std::time::Duration::ZERO };
+    let instance = match instance::claim(&key, wait) {
+        instance::Claim::First(instance) => instance,
+        instance::Claim::Taken => {
+            if !import.is_empty() {
+                // Show it right away: the process ends before a background notification would.
+                let _ = system::notification()
+                    .summary("Zima is already open")
+                    .body("Quit it from the tray icon, then run the import again.")
+                    .show();
+            }
+            // Launch at login starts hidden; if Zima is already running there's nothing to show.
+            if !hidden {
+                instance::signal_show(&key);
+            }
+            return Ok(());
+        }
+    };
+
+    instance::mark_running();
+    // Before any window, so the taskbar groups Zima with its Start-menu shortcut.
+    system::set_app_id();
     window::select_backend(store.load_state().software_rendering)?;
 
     let ui = AppWindow::new()?;
@@ -51,7 +79,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = app::App::load(store, &ui, &import);
     app::wire(&app, &ui);
 
-    // Closing the window (red button or Alt+F4) hides it; Zima keeps running in the tray.
+    // Closing the window (close button or Alt+F4) hides it to the tray, or quits if
+    // "Keep running in the tray" is off.
     ui.on_close_window({
         let ui = ui.as_weak();
         let app = app.clone();
@@ -59,14 +88,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ui) = ui.upgrade() {
                 let _ = ui.hide();
             }
-            app.borrow_mut().hidden_to_tray();
+            app.borrow_mut().window_closed();
         }
     });
     ui.window().on_close_requested({
         let app = app.clone();
         move || {
-            app.borrow_mut().hidden_to_tray();
+            app.borrow_mut().window_closed();
             slint::CloseRequestResponse::HideWindow
+        }
+    });
+
+    // Another launch of Zima on this folder asked for the window.
+    instance.on_show({
+        let ui = ui.as_weak();
+        move || {
+            let _ = ui.upgrade_in_event_loop(|ui| {
+                let _ = ui.show();
+                ui.window().set_minimized(false);
+                window::bring_to_front(&ui);
+            });
         }
     });
 
@@ -102,7 +143,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Keep running with the window hidden, until "Quit" in the tray.
     slint::run_event_loop_until_quit()?;
 
-    // Save anything still waiting on the debounce timer.
+    // Save anything still waiting on the debounce timer, and where the window and cursor are.
+    app.borrow_mut().remember_window();
+    app.borrow_mut().remember_cursor();
     app.borrow_mut().flush();
     drop(tray);
     Ok(())

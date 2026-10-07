@@ -26,7 +26,7 @@ impl App {
         let mut rows: Vec<(u8, Option<chrono::NaiveDate>, TaskRow)> = Vec::new();
         let mut open = 0;
         for note in self.notes.iter().filter(|n| n.is_listed()) {
-            for task in tasks::extract(&note.body, now) {
+            for task in self.summary(note).tasks.iter().cloned() {
                 if !task.done {
                     open += 1;
                 }

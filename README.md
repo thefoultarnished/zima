@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="ui/icon.svg" width="72" height="72" alt="Zima icon">
+  <img src="ui/icon.png" width="72" height="72" alt="Zima icon">
 </p>
 
 <h1 align="center">Zima</h1>
@@ -30,15 +30,19 @@ This is a rewrite of an older Zima built with Tauri and React. It has also been 
 
 If you write something like "dentist friday 10am" without the `@remind`, Zima notices and offers to remind you.
 
-**Getting out of the way.** Close the window and Zima keeps running in the tray. `Ctrl+Alt+N` opens a small capture box from any app. Any note can pop out as a sticky note that stays on your desktop, and any note with `---` between sections can be presented as slides.
+**Getting out of the way.** Close the window and Zima keeps running in the tray, so reminders still go off. If you'd rather the close button quit the app, turn off **Keep running in the tray** in Settings. Opening Zima again while it's already running just brings back the window you have. `Ctrl+Alt+N` opens a small capture box from any app. Any note can pop out as a sticky note that stays on your desktop, and any note with `---` between sections can be presented as slides.
 
-**Making it yours.** Several built-in themes (Light, Dark, Ethereal, Zima Blue, Sakura, Cyberpunk and more), an Auto theme that follows the time of day, your own accent colour, and a fully custom theme in `theme.json`. Text size and the size of the whole interface can be changed separately. Keyboard shortcuts can be rebound in Settings.
+**Making it yours.** Several built-in themes (Light, Dark, Ethereal, Zima Blue, Sakura, Cyberpunk and more), an Auto theme that follows the time of day, your own accent colour, and a fully custom theme in `theme.json`. Text size and the size of the whole interface can be changed separately. Keyboard shortcuts can be rebound in Settings (`Ctrl+,`).
 
 **Also in there.** Spell check, word lookup, writing stats, a calendar, notebooks, note colours, archiving, merging notes, and import and export of Markdown folders and zip files.
 
 ## Sync
 
 Notes live in `%APPDATA%\Zima` by default. In Settings you can move them into Google Drive, OneDrive, Dropbox or any other folder, and Zima will pick up changes made on your other computers. If the same note was edited in two places, both versions are kept.
+
+## Backups
+
+Once a day Zima zips your whole notes folder into `%APPDATA%\Zima\backups` and keeps the last 14. Backups always stay on this PC, even when your notes are in a synced folder. **Back up now** in Settings makes one straight away, and **Open backups folder** shows them. To get notes back, unzip a backup into your notes folder while Zima is closed.
 
 ## Web clipper
 
@@ -66,9 +70,17 @@ zima --help
 You'll need a recent [Rust](https://rustup.rs) toolchain on Windows.
 
 ```sh
-cargo build --release      # target/release/zima.exe
+cargo build --release      # target/release/zima.exe (fully optimised, takes several minutes)
 cargo test                 # unit tests and command line tests
 ```
+
+To make an installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`), then after the release build run:
+
+```sh
+ISCC installer/zima.iss    # target/installer/Zima-Setup-<version>.exe
+```
+
+The installer needs no admin rights. It puts Zima in `%LOCALAPPDATA%\Programs\Zima` and adds it to the Start menu, which also lets reminders show up as coming from Zima rather than Windows PowerShell. Uninstalling leaves your notes alone.
 
 To try it without touching your real notes, point it at an empty folder:
 

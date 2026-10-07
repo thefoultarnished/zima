@@ -78,7 +78,12 @@ impl App {
     /// Start a fresh copy of Zima (it reads the new location) and quit this one.
     pub(super) fn restart(&mut self) {
         self.flush();
-        let args: Vec<String> = std::env::args().skip(1).filter(|a| a != crate::system::HIDDEN_ARG).collect();
+        // The new copy waits for this one to finish quitting instead of handing over to it.
+        let mut args: Vec<String> = std::env::args()
+            .skip(1)
+            .filter(|a| a != crate::system::HIDDEN_ARG && a != crate::instance::RESTART_ARG)
+            .collect();
+        args.push(crate::instance::RESTART_ARG.into());
         match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(args).spawn()) {
             Ok(_) => {
                 let _ = slint::quit_event_loop();
@@ -145,6 +150,8 @@ impl App {
         self.index_dirty = self.index_dirty || conflicts > 0;
         self.refresh_lists();
         self.refresh_reminders();
+        // Another device may have added or removed links to the open note.
+        self.refresh_backlinks();
         if changed_current {
             if let (Some(ui), Some(note)) = (self.ui.upgrade(), self.current()) {
                 ui.set_note_title(note.title.as_str().into());

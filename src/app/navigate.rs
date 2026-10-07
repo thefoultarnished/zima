@@ -20,6 +20,8 @@ pub enum PaletteMode {
     Template,
     /// Pick (or name) a notebook for a note.
     Notebook(NoteId),
+    /// Pick (or paste) an emoji for a note.
+    Emoji(NoteId),
     /// Notes from this day in earlier weeks, months and years.
     OnThisDay,
 }
@@ -34,6 +36,8 @@ pub enum PaletteEntry {
     Template(NoteId),
     /// Put the note in this notebook (`None` = no notebook).
     SetNotebook(NoteId, Option<String>),
+    /// Give the note this emoji (`None` = no emoji).
+    SetEmoji(NoteId, Option<String>),
 }
 
 const MAX_RESULTS: usize = 50;
@@ -48,7 +52,8 @@ impl App {
                 PaletteMode::MergeTarget => "Merge this note into\u{2026}",
                 PaletteMode::Template => "New note from template\u{2026}",
                 PaletteMode::Notebook(_) => "Move to notebook\u{2026} (type a new name to create one)",
-                PaletteMode::OnThisDay => "On this day\u{2026}",
+                PaletteMode::Emoji(_) => "Pick an emoji\u{2026} (Win+. to type any emoji)",
+            PaletteMode::OnThisDay => "On this day\u{2026}",
             };
             ui.set_palette_placeholder(placeholder.into());
             ui.set_palette_open(true);
@@ -66,7 +71,9 @@ impl App {
             subtitle: subtitle.into(),
             kind: kind.into(),
             shortcut: shortcut.into(),
+            emoji: Default::default(),
         };
+        let note_emoji = |note: &crate::model::Note| -> slint::SharedString { note.emoji.as_deref().and_then(crate::emoji::clean).unwrap_or_default().into() };
 
         match self.palette_mode {
             PaletteMode::All => {
@@ -84,7 +91,7 @@ impl App {
                     };
                     if let Some(score) = score {
                         let subtitle = if note.archived { "Archived".to_string() } else { super::relative_time(note.modified) };
-                        scored.push((score, PaletteEntry::Note(note.id), item(title, subtitle, "note", "")));
+                        scored.push((score, PaletteEntry::Note(note.id), PaletteItem { emoji: note_emoji(note), ..item(title, subtitle, "note", "") }));
                     }
                 }
                 // Commands only appear once you type.
@@ -128,12 +135,19 @@ impl App {
                 }
                 scored.push((-1000, PaletteEntry::SetNotebook(target, None), item("No notebook".into(), String::new(), "command", "")));
             }
+            PaletteMode::Emoji(target) => {
+                for choice in crate::emoji::choices(&query) {
+                    let emoji = choice.emoji.clone();
+                    scored.push((choice.score, PaletteEntry::SetEmoji(target, Some(choice.emoji)), PaletteItem { emoji: emoji.into(), ..item(choice.label, String::new(), "command", "") }));
+                }
+                scored.push((-1000, PaletteEntry::SetEmoji(target, None), item("No emoji".into(), String::new(), "command", "")));
+            }
             PaletteMode::OnThisDay => {
                 for (id, label) in self.on_this_day() {
                     if let Some(note) = self.find(id) {
                         let title = display_title(note);
                         if fuzzy_score(&query, &title).is_some() {
-                            scored.push((0, PaletteEntry::Note(id), item(title, label, "note", "")));
+                            scored.push((0, PaletteEntry::Note(id), PaletteItem { emoji: note_emoji(note), ..item(title, label, "note", "") }));
                         }
                     }
                 }
@@ -155,7 +169,7 @@ impl App {
                         } else {
                             PaletteEntry::MergeInto(note.id)
                         };
-                        scored.push((score, entry, item(title, super::relative_time(note.modified), "note", "")));
+                        scored.push((score, entry, PaletteItem { emoji: note_emoji(note), ..item(title, super::relative_time(note.modified), "note", "") }));
                     }
                 }
             }
@@ -200,6 +214,7 @@ impl App {
             PaletteEntry::MergeInto(target) => self.merge_current_into(target),
             PaletteEntry::Template(template) => self.new_from_template(template),
             PaletteEntry::SetNotebook(id, notebook) => self.set_notebook(id, notebook),
+            PaletteEntry::SetEmoji(id, emoji) => self.set_emoji(id, emoji),
         }
     }
 
@@ -231,7 +246,7 @@ impl App {
                 self.set_view_mode(mode);
             }
             "bold" | "italic" | "underline" => self.format(id),
-            "shortcuts" => self.open_shortcuts(),
+            "shortcuts" => ui.invoke_open_settings("shortcuts".into()),
             "edit-theme" => self.edit_theme(),
             "present" => self.start_presenting(),
             "daily" => self.open_daily(chrono::Local::now().date_naive()),
@@ -293,6 +308,11 @@ impl App {
                     self.pick_notebook(id);
                 }
             }
+            "emoji" => {
+                if let Some(id) = current {
+                    self.pick_emoji(id);
+                }
+            }
             "save-search" => self.save_search(),
             "import-folder" => self.import_markdown_folder(),
             "export-all" => self.export_all(),
@@ -302,14 +322,18 @@ impl App {
             "tasks" => self.open_tasks(),
             "lookup" => self.look_up_word(),
             "history" => self.open_history(),
-            "settings" => ui.set_settings_open(true),
+            "sort-changed" => self.set_note_order(0),
+            "sort-title" => self.set_note_order(1),
+            "sort-created" => self.set_note_order(2),
+            "settings" => ui.invoke_open_settings("".into()),
             "export" => self.export_note(),
             "export-html" => self.export_html(),
             "print" => self.print_note(),
             "share-image" => self.share_image(),
             "lock" => self.toggle_lock(),
             "import" => self.import_zima(),
-            "backup" => self.backup_now(true),
+            "backup" => self.backup_now(),
+            "open-backups" => self.open_backups_folder(),
             "open-folder" => self.open_notes_folder(),
             "quit" => {
                 self.flush();

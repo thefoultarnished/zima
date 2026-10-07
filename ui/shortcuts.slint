@@ -11,20 +11,18 @@ export struct ShortcutRow {
     custom: bool,
 }
 
-// Keyboard shortcuts editor: click a shortcut, press the new keys.
-export component ShortcutsPopover {
+// Keyboard shortcuts editor (a page of the settings window): click a shortcut, press the new keys.
+export component ShortcutsEditor {
     in property <[ShortcutRow]> rows;
-    in property <length> limit-height: 600px;
     callback set-shortcut(string, string);
     callback reset-shortcut(string);
-    callback close();
     callback filter-edited(string);
 
     // The command waiting for a new key combination ("" = none).
     property <string> recording;
 
-    width: 520px;
-    height: min(content.preferred-height + 100px, root.limit-height);
+    // The filter box starts empty each time the page is shown, so show every command.
+    init => { root.filter-edited(""); }
 
     // Turn a key event into "Ctrl+Alt+Shift+X".
     function combo(event: KeyEvent) -> string {
@@ -33,18 +31,6 @@ export component ShortcutsPopover {
             : event.text == Key.F5 ? "F5" : event.text == Key.F6 ? "F6" : event.text == Key.F7 ? "F7" : event.text == Key.F8 ? "F8"
             : event.text == Key.F9 ? "F9" : event.text == Key.F10 ? "F10" : event.text == Key.F11 ? "F11" : event.text == Key.F12 ? "F12"
             : event.text.to-uppercase());
-    }
-
-    TouchArea { }
-
-    Rectangle {
-        border-radius: 14px;
-        background: Theme.popover;
-        border-width: 1px;
-        border-color: Theme.rule;
-        drop-shadow-blur: 32px;
-        drop-shadow-offset-y: 12px;
-        drop-shadow-color: #00000050;
     }
 
     // Catches the next key combination while recording.
@@ -74,30 +60,8 @@ export component ShortcutsPopover {
 
     VerticalLayout {
         HorizontalLayout {
-            height: 52px;
-            padding-left: 18px;
-            padding-right: 10px;
-            Text {
-                horizontal-stretch: 1;
-                text: "Keyboard shortcuts";
-                color: Theme.ink;
-                font-size: 15px;
-                font-weight: 600;
-                vertical-alignment: center;
-            }
-            VerticalLayout {
-                alignment: center;
-                IconButton {
-                    description: "Close";
-                    icon: Icons.close;
-                    clicked => { root.close(); }
-                }
-            }
-        }
-
-        HorizontalLayout {
-            padding-left: 16px;
-            padding-right: 16px;
+            padding-left: 22px;
+            padding-right: 22px;
             padding-bottom: 8px;
             Rectangle {
                 height: 30px;
@@ -127,8 +91,8 @@ export component ShortcutsPopover {
         scroll := ScrollView {
             content := VerticalLayout {
                 width: scroll.visible-width;
-                padding-left: 12px;
-                padding-right: 12px;
+                padding-left: 14px;
+                padding-right: 14px;
                 padding-bottom: 12px;
                 spacing: 1px;
 

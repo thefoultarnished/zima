@@ -100,6 +100,9 @@ export component Editor {
     callback new-note();
     callback toggle-task(int);
     callback link-clicked(string);
+    // The pointer rests on a block with [[links]] (their titles, window position), or leaves it.
+    callback link-hover([string], length, length);
+    callback link-hover-end();
     callback open-note(string);
     // Notes linking here with [[…]], shown under the preview.
     in property <[LinkRow]> backlinks;
@@ -132,6 +135,10 @@ export component Editor {
         body.focus();
         body.set-selection-offsets(anchor, cursor);
     }
+
+    // The hover card would be left pointing at something that moved or went away.
+    changed blocks => { root.link-hover-end(); }
+    changed view-mode => { root.link-hover-end(); }
 
     // Start each note scrolled to the top.
     changed current-id => {
@@ -323,6 +330,7 @@ export component Editor {
         x: root.edit-width;
         width: root.width - root.edit-width;
         visible: root.has-note && root.view-mode != 0;
+        scrolled => { root.link-hover-end(); }
 
         property <length> column-width: root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
 
@@ -356,8 +364,11 @@ export component Editor {
 
             for block in root.blocks: BlockView {
                 block: block;
+                link-previews: true;
                 toggle-task(line) => { root.toggle-task(line); }
                 link-clicked(url) => { root.link-clicked(url); }
+                link-hover(titles, x, y) => { root.link-hover(titles, x, y); }
+                link-hover-end => { root.link-hover-end(); }
             }
 
             if root.backlinks.length > 0: VerticalLayout {

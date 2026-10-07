@@ -67,6 +67,45 @@ struct ListState {
     next: Option<u64>,
 }
 
+/// Stands in for a `==` in a block's text until [`highlights`] knows the theme's colour.
+/// A private-use character, so it never clashes with what people type.
+const MARK: &str = "\u{E000}";
+
+/// Turn the `==highlight==` marks in a block's inline Markdown into coloured text (StyledText can't
+/// draw a background). Like Obsidian, a mark opens before a non-space and closes after one;
+/// a mark left without a partner is shown as a plain `==`.
+pub fn highlights(inline: &str, color: &str) -> String {
+    let parts: Vec<&str> = inline.split(MARK).collect();
+    let mut out = String::with_capacity(inline.len());
+    out.push_str(parts[0]);
+    let mut i = 1;
+    while i < parts.len() {
+        let opens = parts[i].starts_with(|c: char| !c.is_whitespace());
+        // The partner: the next mark that comes right after a non-space.
+        let close = (i + 1..parts.len()).find(|&j| parts[j - 1].ends_with(|c: char| !c.is_whitespace()));
+        match close {
+            Some(j) if opens => {
+                out.push_str(&format!("<font color=\"{color}\">"));
+                out.push_str(&parts[i..j].join("=="));
+                out.push_str("</font>");
+                out.push_str(parts[j]);
+                i = j + 1;
+            }
+            _ => {
+                out.push_str("==");
+                out.push_str(parts[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The same text with every `==` mark left as typed, for when the highlight can't be shown.
+pub fn plain_marks(inline: &str) -> String {
+    inline.replace(MARK, "==")
+}
+
 /// `[[Note title]]` → a link with a `note:` URL (spaces as %20). Newlines are kept, so line numbers don't move.
 fn wiki_links(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
@@ -273,7 +312,7 @@ pub fn parse(source: &str) -> Vec<Block> {
                 _ => {}
             },
             Event::Text(text) if in_code => code.push_str(&text),
-            Event::Text(text) => inline.push_str(&escape(&text)),
+            Event::Text(text) => inline.push_str(&escape(&text).replace("==", MARK)),
             Event::Code(text) => inline.push_str(&format!("`{}`", text.replace('`', "'"))),
             Event::FootnoteReference(label) => inline.push_str(&format!("\\[{label}\\]")),
             Event::InlineHtml(html) | Event::Html(html) => {
@@ -320,6 +359,128 @@ fn heading_level(level: HeadingLevel) -> u8 {
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
     }
+}
+
+/// Titles of the `[[notes]]` linked in a block's inline Markdown (`[text](note:Some%20title)`), in order,
+/// without repeats (ignoring case).
+pub fn note_links(inline: &str) -> Vec<String> {
+    const MARK: &str = "](note:";
+    let mut found: Vec<String> = Vec::new();
+    let mut from = 0;
+    while let Some(at) = inline[from..].find(MARK) {
+        let start = from + at;
+        let url = start + MARK.len();
+        from = url;
+        // An escaped bracket is literal text, not a link.
+        if inline[..start].ends_with('\\') {
+            continue;
+        }
+        // The link ends at the matching ")"; titles may hold balanced brackets.
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, c) in inline[url..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    end = Some(url + i);
+                    break;
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        let Some(end) = end else { break };
+        let title = inline[url..end].replace("%20", " ").trim().to_string();
+        from = end;
+        if !title.is_empty() && !found.iter().any(|t| t.eq_ignore_ascii_case(&title)) {
+            found.push(title);
+        }
+    }
+    found
+}
+
+/// A line without its Markdown symbols: "# ", "> ", "- [ ] " and the emphasis marks `* _ ~ \``.
+pub fn strip_markers(line: &str) -> String {
+    let line = line.trim_start_matches(['#', '>', '-', '+', ' ']);
+    let line = line.strip_prefix("[ ] ").or_else(|| line.strip_prefix("[x] ")).unwrap_or(line);
+    line.chars().filter(|c| !matches!(c, '*' | '_' | '~' | '`')).collect()
+}
+
+/// `[[X]]` to `X`, `[t](u)` to `t` and `![a](u)` to `a`.
+fn strip_links(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let image = rest[..open].ends_with('!');
+        let before = &rest[..open - usize::from(image)];
+        let after = &rest[open + 1..];
+        if let Some(inner) = after.strip_prefix('[').and_then(|a| a.find("]]").map(|e| (&a[..e], &a[e + 2..]))) {
+            out.push_str(before);
+            out.push_str(inner.0.trim());
+            rest = inner.1;
+        } else if let Some(close) = after.find("](").filter(|&c| !after[..c].contains('[')) {
+            match after[close + 2..].find(')') {
+                Some(end) => {
+                    out.push_str(before);
+                    out.push_str(&after[..close]);
+                    rest = &after[close + 2 + end + 1..];
+                }
+                None => {
+                    out.push_str(&rest[..open + 1]);
+                    rest = after;
+                }
+            }
+        } else {
+            out.push_str(&rest[..open + 1]);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The first few lines of a note as plain text, for a hover card: no blank lines, code, rules or table
+/// separators; Markdown marks removed. A first line equal to `skip` (the title) is dropped.
+pub fn plain_snippet(body: &str, skip: &str, max_lines: usize, max_chars: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut fence: Option<&str> = None;
+    for raw in body.lines() {
+        let trimmed = raw.trim();
+        let marker = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m));
+        match (fence, marker) {
+            (Some(open), Some(m)) if open == m => fence = None,
+            (Some(_), _) => {}
+            (None, Some(m)) => fence = Some(m),
+            (None, None) => {
+                let rule = trimmed.len() >= 3 && trimmed.chars().all(|c| c == '-');
+                let table_separator = trimmed.contains('-') && trimmed.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '));
+                if trimmed.is_empty() || rule || table_separator {
+                    continue;
+                }
+                // "#tag" is text; only "# Heading" has a symbol to remove.
+                let plain = match trimmed.strip_prefix('#') {
+                    Some(tag) if tag.chars().next().is_some_and(|c| c != '#' && c != ' ') => format!("#{}", strip_markers(tag)),
+                    _ => strip_markers(trimmed),
+                };
+                let text = strip_links(&plain).trim().to_string();
+                if !text.is_empty() {
+                    lines.push(text);
+                }
+            }
+        }
+    }
+    if lines.first().is_some_and(|first| first.eq_ignore_ascii_case(skip.trim())) {
+        lines.remove(0);
+    }
+    lines.truncate(max_lines);
+    let text = lines.join("\n");
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    let mut cut: String = text.chars().take(max_chars).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('\u{2026}');
+    cut
 }
 
 /// Escape characters that would otherwise be read as Markdown when re-parsed.
@@ -410,5 +571,120 @@ mod tests {
         assert_eq!(kinds("use `x` and [site](https://a.b)")[0].1, "use `x` and [site](https://a.b)");
         assert_eq!(kinds("2 \\* 3")[0].1, "2 \\* 3");
         assert_eq!(kinds("a <u>b</u>")[0].1, "a <u>b</u>");
+    }
+
+    /// The block's text with its `==` marks turned into colour, as Preview shows it.
+    fn marked(src: &str) -> String {
+        highlights(&parse(src)[0].text, "#f00")
+    }
+
+    #[test]
+    fn highlight_marks_become_colour() {
+        assert_eq!(marked("a ==big== day"), "a <font color=\"#f00\">big</font> day");
+        assert_eq!(marked("==one== and ==two=="), "<font color=\"#f00\">one</font> and <font color=\"#f00\">two</font>");
+        assert_eq!(marked("==a **b** c=="), "<font color=\"#f00\">a **b** c</font>");
+        assert_eq!(marked("- [ ] ==soon=="), "<font color=\"#f00\">soon</font>");
+        assert_eq!(marked("# ==Title=="), "**<font color=\"#f00\">Title</font>**");
+    }
+
+    #[test]
+    fn highlight_needs_text_against_its_marks() {
+        assert_eq!(marked("if a == b then"), "if a == b then");
+        assert_eq!(marked("a == b == c"), "a == b == c");
+        assert_eq!(marked("x ==y"), "x ==y");
+        assert_eq!(marked("plain"), "plain");
+        assert_eq!(marked("a = b"), "a = b");
+    }
+
+    #[test]
+    fn highlight_left_alone_in_code() {
+        assert_eq!(marked("`a==b==c`"), "`a==b==c`");
+        assert_eq!(parse("```\n==x==\n```")[0].text, "==x==");
+    }
+
+    #[test]
+    fn highlight_edge_cases() {
+        assert_eq!(highlights("", "#f00"), "");
+        assert_eq!(marked("===="), "====");
+        assert_eq!(marked("a === b"), "a === b");
+        assert_eq!(plain_marks(&parse("==x==")[0].text), "==x==");
+    }
+
+    #[test]
+    fn note_links_found_in_order() {
+        assert_eq!(note_links("see [Zed](note:Zed) and [Alpha beta](note:Alpha%20beta)"), vec!["Zed", "Alpha beta"]);
+    }
+
+    #[test]
+    fn note_links_deduped() {
+        assert_eq!(note_links("[a](note:Shop) [b](note:shop) [c](note:Other) [d](note:Shop)"), vec!["Shop", "Other"]);
+    }
+
+    #[test]
+    fn note_links_ignore_web_and_escaped() {
+        assert!(note_links("[site](https://a.b) and \\[x\\](note:Nope)").is_empty());
+        assert_eq!(note_links("[x](note:Fine) \\[y\\](note:Nope)"), vec!["Fine"]);
+        assert_eq!(note_links("[x](note:Foo%20(bar))"), vec!["Foo (bar)"]);
+    }
+
+    #[test]
+    fn note_links_empty() {
+        assert!(note_links("").is_empty());
+        assert!(note_links("plain text").is_empty());
+        assert!(note_links("[x](note:)").is_empty());
+        assert!(note_links("[x](note:unclosed").is_empty());
+    }
+
+    #[test]
+    fn note_links_after_parse() {
+        assert_eq!(note_links(&parse("see [[Groceries]]")[0].text), vec!["Groceries"]);
+        assert_eq!(note_links(&parse("a [[Book ideas]] b")[0].text), vec!["Book ideas"]);
+    }
+
+    #[test]
+    fn snippet_strips_markdown() {
+        assert_eq!(plain_snippet("- [ ] buy **milk**\n> see [[Shop]] and [site](https://a.b)", "", 3, 200), "buy milk\nsee Shop and site");
+        assert_eq!(plain_snippet("![a cat](c.png) here", "", 3, 200), "a cat here");
+    }
+
+    #[test]
+    fn snippet_skips_code_blank_and_rules() {
+        let body = "\n```rust\nlet x = 1;\n\n```\n---\n| a | b |\n|---|:-:|\n\nreal text\n~~~\nmore code\n~~~\nlast";
+        assert_eq!(plain_snippet(body, "", 5, 200), "| a | b |\nreal text\nlast");
+    }
+
+    #[test]
+    fn snippet_skips_title_line() {
+        assert_eq!(plain_snippet("# Groceries\nmilk", "groceries", 3, 200), "milk");
+        // Only the first line, and only when it is the title.
+        assert_eq!(plain_snippet("milk\nGroceries", "Groceries", 3, 200), "milk\nGroceries");
+    }
+
+    #[test]
+    fn snippet_keeps_tags() {
+        assert_eq!(plain_snippet("#work idea\n## Heading", "", 3, 200), "#work idea\nHeading");
+    }
+
+    #[test]
+    fn snippet_limits_lines_and_chars() {
+        assert_eq!(plain_snippet("a\nb\nc\nd", "", 2, 200), "a\nb");
+        assert_eq!(plain_snippet("abcdefghij", "", 3, 5), "abcde\u{2026}");
+        assert_eq!(plain_snippet("abcde", "", 3, 5), "abcde");
+        let long = "\u{e9}".repeat(500);
+        assert_eq!(plain_snippet(&long, "", 3, 220).chars().count(), 221);
+        let emoji = "\u{1F389}".repeat(500);
+        assert!(plain_snippet(&emoji, "", 3, 220).ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn snippet_empty_body() {
+        assert_eq!(plain_snippet("", "x", 3, 200), "");
+        assert_eq!(plain_snippet("\n  \n---\n", "x", 3, 200), "");
+    }
+
+    #[test]
+    fn strip_markers_removes_symbols() {
+        assert_eq!(strip_markers("## **Hi** _there_"), "Hi there");
+        assert_eq!(strip_markers("- [x] done"), "done");
     }
 }

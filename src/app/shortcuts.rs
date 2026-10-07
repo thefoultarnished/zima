@@ -60,15 +60,6 @@ impl App {
         self.refresh_shortcuts();
     }
 
-    pub fn open_shortcuts(&mut self) {
-        self.shortcut_filter.clear();
-        self.refresh_shortcuts();
-        if let Some(ui) = self.ui.upgrade() {
-            ui.set_settings_open(false);
-            ui.set_shortcuts_open(true);
-        }
-    }
-
     /// Bind `combo` to a command (taking it away from any other command that had it).
     pub fn set_shortcut(&mut self, id: &str, combo: &str) {
         for command in COMMANDS {

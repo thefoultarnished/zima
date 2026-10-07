@@ -5,7 +5,7 @@ import { DragArea, IconButton, Icons, ResizeEdge } from "widgets.slint";
 // A note popped out into its own small always-on-top window.
 export component StickyWindow inherits Window {
     title: "Sticky note";
-    icon: @image-url("icon.svg");
+    icon: @image-url("icon.png");
     no-frame: true;
     always-on-top: true;
     preferred-width: 300px;
@@ -19,6 +19,7 @@ export component StickyWindow inherits Window {
     in-out property <string> body;
     // Index into Theme.note-colors; -1 = none.
     in property <int> note-color: -1;
+    in property <string> note-emoji;
 
     callback body-edited(string);
     callback close-sticky();
@@ -44,6 +45,16 @@ export component StickyWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 6px;
                 spacing: 2px;
+
+                if root.note-emoji != "": VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.note-emoji;
+                        font-family: "Segoe UI Emoji";
+                        font-size: 12px;
+                        color: root.note-color >= 0 ? Theme.note-colors[root.note-color] : Theme.ink-soft;
+                    }
+                }
 
                 Text {
                     horizontal-stretch: 1;

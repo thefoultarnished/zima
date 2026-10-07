@@ -286,9 +286,29 @@ mod tests {
     }
 
     #[test]
+    fn keep_running_in_tray_is_on_for_old_settings() {
+        // Closing used to always hide to the tray; old settings must keep that behaviour.
+        let (store, root) = scratch_store("old-close");
+        fs::write(root.join("state.json"), r#"{"tray_hint_shown": true}"#).unwrap();
+        let state = store.load_state();
+        assert!(state.close_to_tray);
+        assert!(state.tray_hint_shown);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn keep_running_in_tray_off_is_saved() {
+        let (store, root) = scratch_store("close-off");
+        store.save_state(&UiState { close_to_tray: false, ..Default::default() }).unwrap();
+        assert!(!store.load_state().close_to_tray);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn missing_settings_file_gives_defaults() {
         let (store, root) = scratch_store("no-state");
         assert_eq!(store.load_state().ui_scale, 1.0);
+        assert!(store.load_state().close_to_tray);
         let _ = fs::remove_dir_all(&root);
     }
 }

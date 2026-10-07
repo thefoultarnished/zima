@@ -23,6 +23,7 @@ impl App {
         window.set_note_title(display_title(&note).into());
         window.set_body(note.body.as_str().into());
         window.set_note_color(note.color.map_or(-1, |c| c as i32));
+        window.set_note_emoji(note.emoji.as_deref().and_then(crate::emoji::clean).unwrap_or_default().into());
         self.sync_theme_to_sticky(&window);
 
         let app = self.this.clone();
@@ -36,6 +37,14 @@ impl App {
             if let Some(app) = app.upgrade() {
                 with_app(&app, move |a| a.close_sticky(id));
             }
+        });
+        // Alt+F4 closes it like its own close button, so it isn't kept hidden and reopened next launch.
+        let app = self.this.clone();
+        window.window().on_close_requested(move || {
+            if let Some(app) = app.upgrade() {
+                with_app(&app, move |a| a.close_sticky(id));
+            }
+            slint::CloseRequestResponse::HideWindow
         });
         let app = self.this.clone();
         window.on_open_in_app(move || {
@@ -122,6 +131,7 @@ impl App {
             }
             sticky.window.set_note_title(display_title(note).into());
             sticky.window.set_note_color(note.color.map_or(-1, |c| c as i32));
+            sticky.window.set_note_emoji(note.emoji.as_deref().and_then(crate::emoji::clean).unwrap_or_default().into());
         }
     }
 

@@ -7,6 +7,8 @@ export struct PaletteItem {
     // "note", "command" or "heading".
     kind: string,
     shortcut: string,
+    // A note's emoji; shown instead of the icon when set.
+    emoji: string,
 }
 
 // Quick switcher (Ctrl+K): type to find notes and commands.
@@ -159,12 +161,20 @@ export component QuickSwitcher {
 
                         VerticalLayout {
                             alignment: center;
-                            Icon {
+                            if entry.item.emoji == "": Icon {
                                 width: 14px;
                                 height: 14px;
                                 commands: entry.item.kind == "command" ? Icons.chevron-right
                                     : entry.item.kind == "heading" ? Icons.quote : Icons.edit;
                                 stroke: Theme.muted;
+                            }
+                            if entry.item.emoji != "": Text {
+                                width: 14px;
+                                text: entry.item.emoji;
+                                font-family: "Segoe UI Emoji";
+                                font-size: 14px;
+                                color: Theme.ink-soft;
+                                horizontal-alignment: center;
                             }
                         }
 
