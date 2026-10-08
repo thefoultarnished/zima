@@ -119,6 +119,10 @@ pub struct UiState {
     pub cursors: std::collections::BTreeMap<NoteId, usize>,
     /// Order of the note lists: 0 = last changed first, 1 = title A to Z, 2 = newest created first.
     pub note_order: i32,
+    /// Keep older copies of notes while they're edited (see `history.rs`).
+    pub version_history: bool,
+    /// The Tasks view also lists ticked tasks.
+    pub tasks_show_done: bool,
 }
 
 /// The main window's position and size in physical pixels.
@@ -162,6 +166,8 @@ impl Default for UiState {
             window: None,
             cursors: Default::default(),
             note_order: 0,
+            version_history: true,
+            tasks_show_done: false,
         }
     }
 }
@@ -183,9 +189,34 @@ pub struct Reminder {
     pub repeat: Option<crate::reminders::Repeat>,
 }
 
+/// A task added with an `@due` line, kept in `tasks.json` rather than in a note.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuickTask {
+    pub id: u64,
+    pub text: String,
+    /// "YYYY-MM-DD"; `None`: no deadline.
+    #[serde(default)]
+    pub due: Option<String>,
+    #[serde(default)]
+    pub done: bool,
+    /// Unix time in milliseconds.
+    #[serde(default)]
+    pub created: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quick_task_round_trips_and_old_files_load() {
+        let task = QuickTask { id: 5, text: "rent".into(), due: Some("2026-10-09".into()), done: false, created: 1 };
+        let back: QuickTask = serde_json::from_str(&serde_json::to_string(&task).unwrap()).unwrap();
+        assert_eq!(back, task);
+        // Only the must-haves: the rest falls back to defaults.
+        let bare: QuickTask = serde_json::from_str(r#"{"id":1,"text":"x"}"#).unwrap();
+        assert_eq!((bare.due, bare.done, bare.created), (None, false, 0));
+    }
 
     #[test]
     fn note_without_emoji_loads() {
@@ -209,6 +240,15 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let back: UiState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.cursors.get(&1_700_000_000_000), Some(&42));
+    }
+
+    #[test]
+    fn version_history_is_on_for_old_settings() {
+        // A state.json from before the setting existed keeps history on; turning it off sticks.
+        let state: UiState = serde_json::from_str(r#"{"theme":2}"#).unwrap();
+        assert!(state.version_history);
+        let off: UiState = serde_json::from_str(r#"{"version_history":false}"#).unwrap();
+        assert!(!off.version_history);
     }
 
     #[test]

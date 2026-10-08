@@ -29,8 +29,51 @@ pub fn apply(kind: &str, text: &str, anchor: usize, cursor: usize) -> Option<Edi
         "move-up" => return move_lines(text, anchor, cursor, true),
         "move-down" => return move_lines(text, anchor, cursor, false),
         "duplicate-line" => return duplicate_lines(text, anchor, cursor),
-        _ => return None,
+        "highlight" => colour(text, start, end, ""),
+        _ => match kind.strip_prefix("colour:") {
+            Some(name) if crate::markdown::TEXT_COLOURS.iter().any(|c| c.name == name) => colour(text, start, end, name),
+            _ => return None,
+        },
     })
+}
+
+/// The opening mark for a colour: `==` for the plain highlight, `==red:` for a named one.
+fn colour_mark(name: &str) -> String {
+    if name.is_empty() { "==".into() } else { format!("=={name}:") }
+}
+
+/// Colour the selection with `==name:…==` (`==…==` when `name` is empty). The same colour again
+/// takes it off; another colour replaces it.
+fn colour(text: &str, start: usize, end: usize, name: &str) -> Edit {
+    let selected = &text[start..end];
+    let new_open = colour_mark(name);
+    // Named colours first: a plain `==` would also match the start of `==red:`.
+    let names = crate::markdown::TEXT_COLOURS.iter().map(|c| c.name).chain([""]);
+    for old in names {
+        let open = colour_mark(old);
+        // Marks just outside the selection: ==red:|word|==
+        if text[..start].ends_with(&open) && text[end..].starts_with("==") {
+            let before = &text[..start - open.len()];
+            if old == name {
+                let out = format!("{before}{selected}{}", &text[end + 2..]);
+                return Edit { text: out, anchor: before.len(), cursor: before.len() + selected.len() };
+            }
+            let out = format!("{before}{new_open}{selected}{}", &text[end..]);
+            let anchor = before.len() + new_open.len();
+            return Edit { text: out, anchor, cursor: anchor + selected.len() };
+        }
+        // Marks inside the selection: |==red:word==|
+        if selected.len() >= open.len() + 2 && selected.starts_with(&open) && selected.ends_with("==") {
+            let inner = &selected[open.len()..selected.len() - 2];
+            if old == name {
+                let out = format!("{}{inner}{}", &text[..start], &text[end..]);
+                return Edit { text: out, anchor: start, cursor: start + inner.len() };
+            }
+            let out = format!("{}{new_open}{inner}=={}", &text[..start], &text[end..]);
+            return Edit { text: out, anchor: start, cursor: start + new_open.len() + inner.len() + 2 };
+        }
+    }
+    wrap(text, start, end, &new_open, "==")
 }
 
 /// Surround the selection with markers, or remove them if they're already there.
@@ -473,6 +516,47 @@ mod tests {
 
     fn run(kind: &str, text: &str, anchor: usize, cursor: usize) -> Edit {
         apply(kind, text, anchor, cursor).unwrap()
+    }
+
+    #[test]
+    fn colour_wraps_and_unwraps() {
+        let e = run("colour:red", "a hot day", 2, 5);
+        assert_eq!(e, Edit { text: "a ==red:hot== day".into(), anchor: 8, cursor: 11 });
+        // The same colour again takes it off.
+        let e = run("colour:red", &e.text, e.anchor, e.cursor);
+        assert_eq!(e, Edit { text: "a hot day".into(), anchor: 2, cursor: 5 });
+        let e = run("highlight", "a hot day", 2, 5);
+        assert_eq!(e, Edit { text: "a ==hot== day".into(), anchor: 4, cursor: 7 });
+    }
+
+    #[test]
+    fn colour_replaces_another_colour() {
+        // Marks outside the selection.
+        let e = run("colour:blue", "a ==red:hot== day", 8, 11);
+        assert_eq!(e, Edit { text: "a ==blue:hot== day".into(), anchor: 9, cursor: 12 });
+        let e = run("highlight", &e.text, e.anchor, e.cursor);
+        assert_eq!(e, Edit { text: "a ==hot== day".into(), anchor: 4, cursor: 7 });
+        let e = run("colour:green", &e.text, e.anchor, e.cursor);
+        assert_eq!(e, Edit { text: "a ==green:hot== day".into(), anchor: 10, cursor: 13 });
+        // Marks inside the selection.
+        let e = run("colour:pink", "a ==red:hot== day", 2, 13);
+        assert_eq!(e, Edit { text: "a ==pink:hot== day".into(), anchor: 2, cursor: 14 });
+        let e = run("colour:pink", &e.text, e.anchor, e.cursor);
+        assert_eq!(e, Edit { text: "a hot day".into(), anchor: 2, cursor: 5 });
+        let e = run("colour:red", "a ==hot== day", 2, 9);
+        assert_eq!(e, Edit { text: "a ==red:hot== day".into(), anchor: 2, cursor: 13 });
+    }
+
+    #[test]
+    fn colour_edges() {
+        // No selection: empty marks with the cursor between them, ready to type.
+        assert_eq!(run("colour:red", "ab", 1, 1), Edit { text: "a==red:==b".into(), anchor: 7, cursor: 7 });
+        assert_eq!(run("colour:red", "", 0, 0), Edit { text: "==red:==".into(), anchor: 6, cursor: 6 });
+        // Unknown colours do nothing.
+        assert_eq!(apply("colour:teal", "abc", 0, 3), None);
+        assert_eq!(apply("colour:", "abc", 0, 3), None);
+        // Bold marks around the selection aren't mistaken for colour.
+        assert_eq!(run("colour:red", "**hot**", 2, 5).text, "**==red:hot==**");
     }
 
     #[test]

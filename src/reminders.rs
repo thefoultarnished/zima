@@ -409,7 +409,7 @@ fn unit(word: &str) -> Option<Duration> {
     })
 }
 
-fn parse_weekday(word: &str) -> Option<Weekday> {
+pub(crate) fn parse_weekday(word: &str) -> Option<Weekday> {
     Some(match word {
         "mon" | "monday" => Weekday::Mon,
         "tue" | "tues" | "tuesday" => Weekday::Tue,

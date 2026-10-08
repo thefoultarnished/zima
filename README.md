@@ -23,9 +23,9 @@ This is a rewrite of an older Zima built with Tauri and React. It has also been 
 
 ## What it does
 
-**Writing.** Edit, split or preview mode (`Ctrl+E` cycles between them), a Markdown preview with code highlighting, tables, checklists and a formatting bar if you like buttons. Zen mode hides everything but the text, with typewriter scrolling and a spotlight that fades the lines you're not working on.
+**Writing.** Edit, split or preview mode (`Ctrl+E` cycles between them), a Markdown preview with code highlighting, tables, checklists and a formatting bar if you like buttons (with text colours: `==red:text==`). Zen mode hides everything but the text, with typewriter scrolling and a spotlight that fades the lines you're not working on.
 
-**Finding things.** `Ctrl+K` opens a quick switcher that searches notes and runs any command. The sidebar keeps your open notes, pinned notes, favourites, recent notes, notebooks, tags and saved searches in one column, and the Bin sits at the bottom. There's also a daily note (`Ctrl+D`), a random note, "on this day", and a Tasks view that collects every checkbox from every note.
+**Finding things.** `Ctrl+K` opens a quick switcher that searches notes and runs any command. The sidebar keeps your open notes, pinned notes, favourites, recent notes, notebooks, tags and saved searches in one column, and the Bin sits at the bottom. There's also a daily note (`Ctrl+D`), a random note, "on this day", and a Tasks view (`Ctrl+T`) that collects every checkbox from every note. To add a task with a deadline, type a line like `@due rent tomorrow` and press Enter: it goes straight into Tasks.
 
 **Commands you type.** Start a line with one of these and press Enter:
 
@@ -48,6 +48,10 @@ If you write something like "dentist friday 10am" without the `@remind`, Zima no
 ## Sync
 
 Notes live in `%APPDATA%\Zima` by default. In Settings you can move them into Google Drive, OneDrive, Dropbox or any other folder, and Zima will pick up changes made on your other computers. If the same note was edited in two places, both versions are kept.
+
+## Version history
+
+While you edit, Zima keeps an older copy of each note about every 10 minutes: every copy from the last day, then one a day for a month, then one a week. Right-click a note and choose **Version history…** (or find it in `Ctrl+K`) to see what each copy would change and restore it. Your current text is kept as a copy first, and `Ctrl+Z` undoes a restore. Like backups, copies stay on this PC in `%APPDATA%\Zima\history`. You can turn this off or clear it in Settings → Sync and backups.
 
 ## Backups
 

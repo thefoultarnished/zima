@@ -8,10 +8,6 @@ impl App {
     }
 
 
-    pub fn open_history(&mut self) {
-        self.not_yet();
-    }
-
     pub fn export_html(&mut self) {
         self.not_yet();
     }

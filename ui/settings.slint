@@ -190,10 +190,23 @@ component ThemePicker {
                     spacing: 5px;
                     Rectangle {
                         height: 36px;
-                        border-radius: 8px;
-                        background: Theme.themes[cell.index].swatch;
-                        border-width: cell.selected ? 2px : 1px;
-                        border-color: cell.selected ? Theme.accent : swatch-touch.has-hover ? Theme.muted : Theme.rule;
+
+                        if Theme.themes[cell.index].picture.width == 0: Rectangle {
+                            border-radius: 8px;
+                            background: Theme.themes[cell.index].swatch;
+                        }
+                        if Theme.themes[cell.index].picture.width > 0: Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: Theme.themes[cell.index].picture;
+                            image-fit: fill;
+                        }
+                        // The outline on top, so the picture doesn't cover it.
+                        Rectangle {
+                            border-radius: 8px;
+                            border-width: cell.selected ? 2px : 1px;
+                            border-color: cell.selected ? Theme.accent : swatch-touch.has-hover ? Theme.muted : Theme.rule;
+                        }
 
                         Rectangle {
                             x: parent.width - 16px;
@@ -225,17 +238,23 @@ component AccentPicker {
     HorizontalLayout {
         alignment: space-between;
 
-        // Theme default.
+        // Theme default. A picture, not a gradient: the CPU renderer draws gradients without round corners.
         Rectangle {
             width: 22px;
             height: 22px;
-            border-radius: 11px;
-            background: @linear-gradient(135deg, #c8794a 0%, #c8794a 50%, #12b5e5 50%, #12b5e5 100%);
-            border-width: !Theme.has-custom-accent ? 2px : 0;
-            border-color: Theme.ink;
             accessible-role: button;
             accessible-label: "Theme's own accent";
             accessible-action-default => { root.pick(""); }
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: @image-url("swatches/accent-default.svg");
+            }
+            Rectangle {
+                border-radius: 11px;
+                border-width: !Theme.has-custom-accent ? 2px : 0;
+                border-color: Theme.ink;
+            }
             TouchArea {
                 clicked => { root.pick(""); }
             }
@@ -482,6 +501,7 @@ struct SettingsPage {
 export component SettingsWindow {
     // Id of the page shown, from `pages`.
     in-out property <string> page: "appearance";
+    changed page => { root.clear-armed = false; }
 
     in-out property <bool> wide;
     in-out property <bool> zen;
@@ -490,6 +510,9 @@ export component SettingsWindow {
     in-out property <bool> launch-at-login;
     in-out property <bool> software-rendering;
     in-out property <bool> close-to-tray;
+    in-out property <bool> version-history;
+    // "Clear history" was clicked once; the second click deletes.
+    property <bool> clear-armed;
     in property <bool> has-note;
     in property <string> clip-token;
     in property <string> sync-location;
@@ -509,6 +532,7 @@ export component SettingsWindow {
     callback set-typewriter(bool);
     callback set-spotlight(bool);
     callback set-close-to-tray(bool);
+    callback set-version-history(bool);
     callback set-launch-at-login(bool);
     callback set-software-rendering(bool);
     callback use-google-drive();
@@ -843,6 +867,28 @@ export component SettingsWindow {
                                     icon: Icons.folder;
                                     label: "Open notes folder";
                                     clicked => { root.open-notes-folder(); }
+                                }
+                            }
+
+                            Divider { }
+
+                            SectionLabel { text: "VERSION HISTORY"; }
+                            SettingRow {
+                                label: "Keep version history";
+                                detail: "An older copy of each note about every 10 minutes while you edit, kept on this PC. Right-click a note for its history";
+                                checked <=> root.version-history;
+                                toggled(on) => { root.set-version-history(on); }
+                            }
+                            ActionRow {
+                                icon: Icons.trash;
+                                label: root.clear-armed ? "Click again to delete every saved copy" : "Clear history";
+                                clicked => {
+                                    if (root.clear-armed) {
+                                        root.clear-armed = false;
+                                        root.run-command("clear-history");
+                                    } else {
+                                        root.clear-armed = true;
+                                    }
                                 }
                             }
                         }

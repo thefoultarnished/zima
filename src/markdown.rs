@@ -71,10 +71,37 @@ struct ListState {
 /// A private-use character, so it never clashes with what people type.
 const MARK: &str = "\u{E000}";
 
+/// A named text colour for `==red:text==`, as "#rrggbb" for light and dark themes.
+pub struct TextColour {
+    pub name: &'static str,
+    pub light: &'static str,
+    pub dark: &'static str,
+}
+
+/// The colours the formatting toolbar offers, readable on light and dark themes.
+pub const TEXT_COLOURS: [TextColour; 7] = [
+    TextColour { name: "red", light: "#dc2626", dark: "#f87171" },
+    TextColour { name: "orange", light: "#ea580c", dark: "#fb923c" },
+    TextColour { name: "green", light: "#16a34a", dark: "#4ade80" },
+    TextColour { name: "blue", light: "#2563eb", dark: "#60a5fa" },
+    TextColour { name: "purple", light: "#9333ea", dark: "#c084fc" },
+    TextColour { name: "pink", light: "#db2777", dark: "#f472b6" },
+    TextColour { name: "gray", light: "#6b7280", dark: "#9ca3af" },
+];
+
+/// The colour named at the start of a highlight (`red:` in `==red:text==`) and the text after it.
+/// Only known names count, and only when some text follows.
+fn named_colour(inner: &str) -> Option<(&'static TextColour, &str)> {
+    let (name, rest) = inner.split_once(':')?;
+    let colour = TEXT_COLOURS.iter().find(|c| c.name.eq_ignore_ascii_case(name))?;
+    (!rest.is_empty()).then_some((colour, rest))
+}
+
 /// Turn the `==highlight==` marks in a block's inline Markdown into coloured text (StyledText can't
 /// draw a background). Like Obsidian, a mark opens before a non-space and closes after one;
-/// a mark left without a partner is shown as a plain `==`.
-pub fn highlights(inline: &str, color: &str) -> String {
+/// a mark left without a partner is shown as a plain `==`. `==red:text==` picks a named colour
+/// instead of `color`.
+pub fn highlights(inline: &str, color: &str, dark: bool) -> String {
     let parts: Vec<&str> = inline.split(MARK).collect();
     let mut out = String::with_capacity(inline.len());
     out.push_str(parts[0]);
@@ -85,8 +112,13 @@ pub fn highlights(inline: &str, color: &str) -> String {
         let close = (i + 1..parts.len()).find(|&j| parts[j - 1].ends_with(|c: char| !c.is_whitespace()));
         match close {
             Some(j) if opens => {
+                let inner = parts[i..j].join("==");
+                let (color, inner) = match named_colour(&inner) {
+                    Some((named, rest)) => (if dark { named.dark } else { named.light }, rest),
+                    None => (color, inner.as_str()),
+                };
                 out.push_str(&format!("<font color=\"{color}\">"));
-                out.push_str(&parts[i..j].join("=="));
+                out.push_str(inner);
                 out.push_str("</font>");
                 out.push_str(parts[j]);
                 i = j + 1;
@@ -101,9 +133,48 @@ pub fn highlights(inline: &str, color: &str) -> String {
     out
 }
 
-/// The same text with every `==` mark left as typed, for when the highlight can't be shown.
+/// The same text with every `==` mark left as typed and `@words` uncoloured, for when the
+/// colours can't be shown.
 pub fn plain_marks(inline: &str) -> String {
-    inline.replace(MARK, "==")
+    inline.replace(MARK, "==").replace([KEYWORD_START, KEYWORD_END], "")
+}
+
+/// Around an `@word` (`@due`, `@remind`…) until [`keywords`] knows the colour. Private-use
+/// characters, like [`MARK`].
+const KEYWORD_START: char = '\u{E001}';
+const KEYWORD_END: char = '\u{E002}';
+
+/// Mark every `@word` in plain text: an `@` at the start of a word (so not in `me@mail.com`)
+/// followed by a letter, then letters, digits, `-` or `_`.
+fn mark_keywords(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    let mut previous: Option<char> = None;
+    while let Some((_, c)) = chars.next() {
+        let starts_word = previous.is_none_or(|p| !p.is_alphanumeric() && p != '@' && p != '_');
+        if c == '@' && starts_word && chars.peek().is_some_and(|&(_, n)| n.is_alphabetic()) {
+            out.push(KEYWORD_START);
+            out.push('@');
+            while let Some(&(_, n)) = chars.peek() {
+                if !(n.is_alphanumeric() || n == '-' || n == '_') {
+                    break;
+                }
+                out.push(n);
+                previous = Some(n);
+                chars.next();
+            }
+            out.push(KEYWORD_END);
+            continue;
+        }
+        out.push(c);
+        previous = Some(c);
+    }
+    out
+}
+
+/// Colour the marked `@words` in a block's inline Markdown.
+pub fn keywords(inline: &str, color: &str) -> String {
+    inline.replace(KEYWORD_START, &format!("<font color=\"{color}\">")).replace(KEYWORD_END, "</font>")
 }
 
 /// `[[Note title]]` → a link with a `note:` URL (spaces as %20). Newlines are kept, so line numbers don't move.
@@ -312,7 +383,7 @@ pub fn parse(source: &str) -> Vec<Block> {
                 _ => {}
             },
             Event::Text(text) if in_code => code.push_str(&text),
-            Event::Text(text) => inline.push_str(&escape(&text).replace("==", MARK)),
+            Event::Text(text) => inline.push_str(&escape(&mark_keywords(&text)).replace("==", MARK)),
             Event::Code(text) => inline.push_str(&format!("`{}`", text.replace('`', "'"))),
             Event::FootnoteReference(label) => inline.push_str(&format!("\\[{label}\\]")),
             Event::InlineHtml(html) | Event::Html(html) => {
@@ -575,7 +646,7 @@ mod tests {
 
     /// The block's text with its `==` marks turned into colour, as Preview shows it.
     fn marked(src: &str) -> String {
-        highlights(&parse(src)[0].text, "#f00")
+        highlights(&parse(src)[0].text, "#f00", false)
     }
 
     #[test]
@@ -597,6 +668,33 @@ mod tests {
     }
 
     #[test]
+    fn keywords_are_coloured() {
+        let shown = |src: &str| keywords(&parse(src)[0].text, "#00f");
+        assert_eq!(shown("pay rent @due fri"), "pay rent <font color=\"#00f\">@due</font> fri");
+        assert_eq!(shown("@remind me (@timer 25)"), "<font color=\"#00f\">@remind</font> me (<font color=\"#00f\">@timer</font> 25)");
+        assert_eq!(shown("- [ ] rent @due-soon, ok"), "rent <font color=\"#00f\">@due-soon</font>, ok");
+    }
+
+    #[test]
+    fn keywords_need_a_word_start_and_a_letter() {
+        let shown = |src: &str| keywords(&parse(src)[0].text, "#00f");
+        assert_eq!(shown("mail me@site.com"), "mail me@site.com");
+        assert_eq!(shown("at @5pm or @ noon"), "at @5pm or @ noon");
+        assert_eq!(shown("`@due` in code"), "`@due` in code");
+        assert_eq!(parse("```\n@due fri\n```")[0].text, "@due fri");
+    }
+
+    #[test]
+    fn keywords_edges() {
+        assert_eq!(mark_keywords(""), "");
+        assert_eq!(mark_keywords("@"), "@");
+        assert_eq!(plain_marks(&parse("try @due ==now==")[0].text), "try @due ==now==");
+        // Together with a highlight, both colours show.
+        let both = keywords(&highlights(&parse("==@due fri==")[0].text, "#f00", false), "#00f");
+        assert_eq!(both, "<font color=\"#f00\"><font color=\"#00f\">@due</font> fri</font>");
+    }
+
+    #[test]
     fn highlight_left_alone_in_code() {
         assert_eq!(marked("`a==b==c`"), "`a==b==c`");
         assert_eq!(parse("```\n==x==\n```")[0].text, "==x==");
@@ -604,10 +702,26 @@ mod tests {
 
     #[test]
     fn highlight_edge_cases() {
-        assert_eq!(highlights("", "#f00"), "");
+        assert_eq!(highlights("", "#f00", false), "");
         assert_eq!(marked("===="), "====");
         assert_eq!(marked("a === b"), "a === b");
         assert_eq!(plain_marks(&parse("==x==")[0].text), "==x==");
+    }
+
+    #[test]
+    fn named_highlight_colours() {
+        assert_eq!(marked("a ==red:big== day"), "a <font color=\"#dc2626\">big</font> day");
+        assert_eq!(marked("==Blue:sky=="), "<font color=\"#2563eb\">sky</font>");
+        assert_eq!(marked("==green:a **b**== and ==c=="), "<font color=\"#16a34a\">a **b**</font> and <font color=\"#f00\">c</font>");
+        assert_eq!(highlights(&parse("==red:hot==")[0].text, "#f00", true), "<font color=\"#f87171\">hot</font>");
+    }
+
+    #[test]
+    fn unknown_or_empty_colour_names_stay_as_text() {
+        assert_eq!(marked("==note: read this=="), "<font color=\"#f00\">note: read this</font>");
+        assert_eq!(marked("==red:=="), "<font color=\"#f00\">red:</font>");
+        assert_eq!(marked("==time 10:30=="), "<font color=\"#f00\">time 10:30</font>");
+        assert_eq!(plain_marks(&parse("==red:x==")[0].text), "==red:x==");
     }
 
     #[test]

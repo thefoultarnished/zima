@@ -13,7 +13,7 @@ import "../fonts/JetBrainsMono-Bold.ttf";
 import "../fonts/JetBrainsMono-Italic.ttf";
 
 import { Theme } from "theme.slint";
-import { FormatButton, Icon, IconButton, Icons, ResizeEdge, TrafficLight } from "widgets.slint";
+import { ColourDot, ColourPicker, FormatButton, Icon, IconButton, Icons, ResizeEdge, TrafficLight } from "widgets.slint";
 import { NoteRow, Sidebar, TagRow } from "sidebar.slint";
 import { Editor, LinkRow, Suggestion } from "editor.slint";
 import { LinkPreview, LinkPreviewCard, MdBlock } from "markdown.slint";
@@ -28,8 +28,9 @@ import { StickyWindow } from "sticky.slint";
 import { CaptureWindow } from "capture.slint";
 import { LookupRow, SpellRow, WordsPanel } from "words.slint";
 import { TaskRow, TasksPopover } from "tasks.slint";
+import { HistoryLine, HistoryPopover } from "history.slint";
 
-export { NoteRow, ReminderRow, MdBlock, LinkPreview, Suggestion, Theme, TagRow, LinkRow, PaletteItem, CalendarDay, StatCell, StatSummary, StickyWindow, CaptureWindow, SpellRow, LookupRow, TaskRow, ShortcutRow }
+export { ColourDot, NoteRow, ReminderRow, MdBlock, LinkPreview, Suggestion, Theme, TagRow, LinkRow, PaletteItem, CalendarDay, StatCell, StatSummary, StickyWindow, CaptureWindow, SpellRow, LookupRow, TaskRow, ShortcutRow, HistoryLine }
 
 // The tray icon keeps Zima (and its reminders) running when the window is closed.
 export component TrayIcon inherits SystemTrayIcon {
@@ -156,6 +157,13 @@ export component AppWindow inherits Window {
     in property <[TaskRow]> task-rows;
     in property <int> open-task-count;
     in-out property <bool> tasks-show-done;
+    // Version history panel
+    in-out property <bool> history-open;
+    in property <[string]> history-versions;
+    in property <int> history-index;
+    in property <[HistoryLine]> history-lines;
+    in property <string> history-summary;
+    in-out property <bool> version-history;
     // Spelling / lookup panel
     in-out property <bool> words-open;
     in property <string> words-mode;
@@ -194,6 +202,11 @@ export component AppWindow inherits Window {
     in-out property <bool> wide;
     in-out property <bool> zen;
     in-out property <bool> format-bar;
+    // The toolbar is showing (it hides in Zen, Preview and with no note open).
+    property <bool> format-bar-shown: root.format-bar && !root.zen && root.has-note && root.view-mode != 2;
+    // Colours for the toolbar's colour button, from Rust.
+    in property <[ColourDot]> text-colours;
+    in-out property <bool> colour-open;
     in property <string> clock;
 
     // Reminders, settings, toasts
@@ -295,7 +308,13 @@ export component AppWindow inherits Window {
     callback link-hover-end();
     callback task-toggle(string, int);
     callback task-open(string, int);
+    callback quick-task-toggle(string);
+    callback quick-task-delete(string);
     callback tasks-show-done-changed(bool);
+    callback open-history(string);
+    callback history-pick(int);
+    callback history-restore();
+    callback set-version-history(bool);
     callback open-stats();
     callback toggle-section(string);
     callback search-edited(string);
@@ -496,12 +515,14 @@ export component AppWindow inherits Window {
                     root.settings-window-open = false;
                     return accept;
                 }
-                if (root.settings-open || root.reminders-open || root.calendar-open || root.stats-open || root.tasks-open) {
+                if (root.settings-open || root.reminders-open || root.calendar-open || root.stats-open || root.tasks-open || root.history-open || root.colour-open) {
+                    root.colour-open = false;
                     root.settings-open = false;
                     root.reminders-open = false;
                     root.calendar-open = false;
                     root.stats-open = false;
                     root.tasks-open = false;
+                    root.history-open = false;
                     return accept;
                 }
                 if (root.zen) {
@@ -623,6 +644,7 @@ export component AppWindow inherits Window {
                     open-on-this-day => { root.open-on-this-day(); }
                     move-to-notebook(id) => { root.move-to-notebook(id); }
                     pick-emoji(id) => { root.pick-emoji(id); }
+                    open-history(id) => { root.open-history(id); }
                     show-active: root.show-active;
                     show-favorites: root.show-favorites;
                     show-recent: root.show-recent;
@@ -919,7 +941,7 @@ export component AppWindow inherits Window {
 
                 // Formatting toolbar (Ctrl+B / I / U also work without it).
                 Rectangle {
-                    height: root.format-bar && !root.zen && root.has-note && root.view-mode != 2 ? 40px : 0px;
+                    height: root.format-bar-shown ? 40px : 0px;
                     animate height { duration: 180ms; easing: ease-out; }
                     clip: true;
 
@@ -933,6 +955,7 @@ export component AppWindow inherits Window {
                         FormatButton { tooltip: "Italic"; label: "I"; label-weight: 500; label-italic: true; clicked => { root.format("italic"); } }
                         FormatButton { tooltip: "Underline"; label: "U"; label-weight: 500; clicked => { root.format("underline"); } }
                         FormatButton { tooltip: "Strikethrough"; label: "S"; label-weight: 500; clicked => { root.format("strike"); } }
+                        colour-button := FormatButton { tooltip: "Text colour"; label: "A"; label-weight: 700; swatch: true; clicked => { root.colour-open = !root.colour-open; } }
                         Rectangle { width: 1px; background: Theme.rule; }
                         FormatButton { tooltip: "Heading"; label: "H"; label-weight: 700; clicked => { root.format("heading"); } }
                         FormatButton { tooltip: "Bulleted list"; icon: Icons.bullets; clicked => { root.format("bullet"); } }
@@ -998,11 +1021,23 @@ export component AppWindow inherits Window {
     }
 
     // Popovers; clicking anywhere else closes them.
-    if root.reminders-open || root.settings-open || root.calendar-open: TouchArea {
+    if root.reminders-open || root.settings-open || root.calendar-open || root.colour-open: TouchArea {
         clicked => {
             root.reminders-open = false;
             root.settings-open = false;
             root.calendar-open = false;
+            root.colour-open = false;
+        }
+    }
+
+    // Text colours, under the toolbar's colour button.
+    if root.colour-open && root.format-bar-shown: ColourPicker {
+        x: max(8px, min(colour-button.absolute-position.x + (colour-button.width - self.width) / 2, root.width - self.width - 8px));
+        y: colour-button.absolute-position.y + colour-button.height + 4px;
+        colours: root.text-colours;
+        pick(name) => {
+            root.colour-open = false;
+            root.format(name == "" ? "highlight" : "colour:" + name);
         }
     }
 
@@ -1037,8 +1072,31 @@ export component AppWindow inherits Window {
             show-done <=> root.tasks-show-done;
             toggle(note, line) => { root.task-toggle(note, line); }
             open-task(note, line) => { root.task-open(note, line); }
+            quick-toggle(id) => { root.quick-task-toggle(id); }
+            quick-delete(id) => { root.quick-task-delete(id); }
             show-done-changed(on) => { root.tasks-show-done-changed(on); }
             close => { root.tasks-open = false; }
+        }
+    }
+
+    // Version history, centred over a dimmed window.
+    if root.history-open: Rectangle {
+        background: #00000040;
+        TouchArea {
+            clicked => { root.history-open = false; }
+        }
+        HistoryPopover {
+            x: (parent.width - self.width) / 2;
+            y: 56px;
+            limit-height: parent.height - 100px;
+            note-title: root.note-title;
+            versions: root.history-versions;
+            selected: root.history-index;
+            lines: root.history-lines;
+            summary: root.history-summary;
+            pick(index) => { root.history-pick(index); }
+            restore => { root.history-restore(); }
+            close => { root.history-open = false; }
         }
     }
 
@@ -1130,6 +1188,7 @@ export component AppWindow inherits Window {
             launch-at-login <=> root.launch-at-login;
             software-rendering <=> root.software-rendering;
             close-to-tray <=> root.close-to-tray;
+            version-history <=> root.version-history;
             has-note: root.has-note;
             clip-token: root.clip-token;
             sync-location: root.sync-location;
@@ -1147,6 +1206,7 @@ export component AppWindow inherits Window {
             set-typewriter(on) => { root.set-typewriter(on); }
             set-spotlight(on) => { root.set-spotlight(on); }
             set-close-to-tray(on) => { root.set-close-to-tray(on); }
+            set-version-history(on) => { root.set-version-history(on); }
             set-launch-at-login(on) => { root.set-launch-at-login(on); }
             set-software-rendering(on) => { root.set-software-rendering(on); }
             use-google-drive => { root.use-google-drive(); }

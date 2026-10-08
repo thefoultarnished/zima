@@ -96,6 +96,7 @@ impl App {
     pub fn watch_for_external_changes(&mut self) {
         self.last_index_write = self.store.index_modified();
         self.last_reminders_write = self.store.reminders_modified();
+        self.last_tasks_write = self.store.tasks_modified();
         let app = self.this.clone();
         let timer = Timer::default();
         timer.start(TimerMode::Repeated, WATCH_INTERVAL, move || {
@@ -112,6 +113,13 @@ impl App {
                 app.last_reminders_write = reminders_modified;
                 app.reminders = app.store.load_reminders();
                 app.refresh_reminders();
+            }
+            // `@due` tasks added or ticked on another device.
+            let tasks_modified = app.store.tasks_modified();
+            if tasks_modified.is_some() && tasks_modified != app.last_tasks_write {
+                app.last_tasks_write = tasks_modified;
+                app.quick_tasks = app.store.load_tasks();
+                app.refresh_tasks();
             }
         });
         std::mem::forget(timer);

@@ -16,9 +16,11 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+similar = "2.7.0"
 slint = { version = "1.18", features = ["unstable-winit-030"] }
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
-ureq = "3.4.2"
+# Windows' own TLS (SChannel) and certificate store, instead of bundling rustls and its root list.
+ureq = { version = "3.4.2", default-features = false, features = ["native-tls", "gzip"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [build-dependencies]

@@ -187,6 +187,13 @@ pub fn look_up(word: &str) -> Result<Vec<(String, Vec<String>, Vec<String>)>, St
     let url = format!("https://api.dictionaryapi.dev/api/v2/entries/en/{word}");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(25)))
+        // Windows' own secure connection code and trusted certificates (a smaller exe than bundling them).
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
         .build()
         .into();
     // The free service is sometimes slow; try twice before giving up.

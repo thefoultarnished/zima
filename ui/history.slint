@@ -1,0 +1,207 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconButton, Icons } from "widgets.slint";
+
+// One line of a saved copy compared with the note now.
+export struct HistoryLine {
+    text: string,
+    // 0 = the same in both, 1 = only in the copy (restoring brings it back), 2 = only in the note now (restoring removes it).
+    kind: int,
+}
+
+// Older copies of the open note: pick one on the left, see what restoring it would change on the right.
+export component HistoryPopover {
+    in property <string> note-title;
+    // "Today 14:30", newest first.
+    in property <[string]> versions;
+    in property <int> selected;
+    in property <[HistoryLine]> lines;
+    // "Restoring brings back 3 lines and removes 1 line."
+    in property <string> summary;
+    in property <length> limit-height: 600px;
+    callback pick(int);
+    callback restore();
+    callback close();
+
+    width: 820px;
+    height: min(560px, root.limit-height);
+
+    TouchArea { }
+
+    Rectangle {
+        border-radius: 14px;
+        background: Theme.popover;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-blur: 32px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: #00000050;
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            height: 56px;
+            padding-left: 18px;
+            padding-right: 10px;
+            spacing: 10px;
+
+            Text {
+                text: "Version history";
+                color: Theme.ink;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: root.note-title;
+                color: Theme.muted;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    description: "Close";
+                    icon: Icons.close;
+                    clicked => { root.close(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            padding-left: 10px;
+            padding-right: 14px;
+            padding-bottom: 14px;
+            spacing: 12px;
+
+            // Saved copies, newest first.
+            version-list := ScrollView {
+                width: 190px;
+                VerticalLayout {
+                    width: version-list.visible-width;
+                    alignment: start;
+                    spacing: 1px;
+                    for version[index] in root.versions: Rectangle {
+                        height: 32px;
+                        border-radius: 7px;
+                        background: index == root.selected ? Theme.selected : version-touch.has-hover ? Theme.hover : transparent;
+                        accessible-role: list-item;
+                        accessible-label: version;
+                        accessible-item-selectable: true;
+                        accessible-item-selected: index == root.selected;
+                        accessible-action-default => { root.pick(index); }
+
+                        version-touch := TouchArea {
+                            clicked => { root.pick(index); }
+                        }
+                        Text {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            text: version;
+                            color: index == root.selected ? Theme.ink : Theme.ink-soft;
+                            font-size: 13px;
+                            font-weight: index == root.selected ? 600 : 400;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 1px;
+                background: Theme.rule;
+            }
+
+            // The selected copy compared with the note now.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 10px;
+
+                Text {
+                    text: root.summary;
+                    color: Theme.ink-soft;
+                    font-size: 12.5px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: 8px;
+                    background: Theme.hover;
+
+                    diff := ScrollView {
+                        VerticalLayout {
+                            width: diff.visible-width;
+                            padding: 8px;
+                            alignment: start;
+                            for line in root.lines: Rectangle {
+                                border-radius: 4px;
+                                background: line.kind == 1 ? #2ea04333 : line.kind == 2 ? Theme.danger.with-alpha(0.14) : transparent;
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    spacing: 8px;
+                                    Text {
+                                        width: 10px;
+                                        text: line.kind == 1 ? "+" : line.kind == 2 ? "\u{2212}" : "";
+                                        color: line.kind == 1 ? #2ea043 : Theme.danger;
+                                        font-family: "JetBrains Mono";
+                                        font-size: 12.5px;
+                                    }
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        // Keep empty lines one line tall.
+                                        text: line.text == "" ? " " : line.text;
+                                        color: line.kind == 2 ? Theme.muted : Theme.ink;
+                                        font-family: "JetBrains Mono";
+                                        font-size: 12.5px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 14px;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Green comes back, red goes away. Your current text is kept as a copy first, and Ctrl+Z undoes it.";
+                        color: Theme.muted;
+                        font-size: 11.5px;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
+
+                    restore-button := Rectangle {
+                        width: restore-text.preferred-width + 28px;
+                        height: 32px;
+                        border-radius: 8px;
+                        background: restore-touch.pressed ? Theme.accent.darker(0.15) : restore-touch.has-hover ? Theme.accent.brighter(0.08) : Theme.accent;
+                        accessible-role: button;
+                        accessible-label: "Restore this version";
+                        accessible-action-default => { root.restore(); }
+
+                        restore-text := Text {
+                            text: "Restore this version";
+                            color: Theme.on-accent;
+                            font-size: 13px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        restore-touch := TouchArea {
+                            clicked => { root.restore(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

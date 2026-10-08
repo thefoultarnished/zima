@@ -333,6 +333,8 @@ impl App {
             "lock" => self.toggle_lock(),
             "import" => self.import_zima(),
             "backup" => self.backup_now(),
+            // From Settings only (it deletes every copy, so it isn't in the quick switcher).
+            "clear-history" => self.clear_history(),
             "open-backups" => self.open_backups_folder(),
             "open-folder" => self.open_notes_folder(),
             "quit" => {

@@ -2,7 +2,11 @@ import { Palette } from "std-widgets.slint";
 
 export struct ThemeInfo {
     name: string,
-    swatch: brush,
+    // A plain colour for the Settings swatch, or, for themes with a gradient, `picture`. The CPU
+    // renderer (Low-memory rendering) draws gradients with square corners and stray lines, but
+    // draws pictures right.
+    swatch: color,
+    picture: image,
     accent: color,
 }
 
@@ -89,17 +93,18 @@ export global Theme {
         : root.paper;
 
     out property <[ThemeInfo]> themes: [
-        { name: "System", swatch: @linear-gradient(90deg, #faf8f5 0%, #faf8f5 50%, #1c1b1a 50%, #1c1b1a 100%), accent: #c8794a },
+        { name: "System", picture: @image-url("swatches/system.svg"), accent: #c8794a },
         { name: "Light", swatch: #faf8f5, accent: #c8794a },
         { name: "Dark", swatch: #1c1b1a, accent: #c8794a },
-        { name: "Ethereal", swatch: @radial-gradient(circle, #4b3a8f 0%, #0d0c1d 80%), accent: #d8b4fe },
-        { name: "Zima Blue", swatch: @linear-gradient(180deg, #1a1a1f 0%, #1d2e35 100%), accent: #12b5e5 },
-        { name: "Blue White", swatch: @linear-gradient(180deg, #12b5e5 0%, #0ea5e9 100%), accent: #ffffff },
-        { name: "Auto", swatch: @linear-gradient(135deg, #faf8f5 0%, #faf8f5 45%, #1c1b1a 55%, #1c1b1a 100%), accent: #c8794a },
-        { name: root.custom-name, swatch: root.custom-backdrop, accent: root.custom-theme-accent },
-        { name: "Sakura", swatch: @linear-gradient(135deg, #fbd3e0 0%, #fdf6f7 70%), accent: #e0709a },
-        { name: "Cyberpunk", swatch: @linear-gradient(135deg, #ff2a6d 0%, #1d0b33 45%, #05d9e8 100%), accent: #fcee0a },
-        { name: "Expedition 33", swatch: @linear-gradient(160deg, #181b28 0%, #13151d 55%, #5a1e28 100%), accent: #d4af6a },
+        { name: "Ethereal", picture: @image-url("swatches/ethereal.svg"), accent: #d8b4fe },
+        { name: "Zima Blue", picture: @image-url("swatches/zima-blue.svg"), accent: #12b5e5 },
+        { name: "Blue White", picture: @image-url("swatches/blue-white.svg"), accent: #ffffff },
+        { name: "Auto", picture: @image-url("swatches/auto.svg"), accent: #c8794a },
+        // Its colours come from theme.json, so no picture: halfway between the top and bottom.
+        { name: root.custom-name, swatch: root.custom-backdrop-top.mix(root.custom-backdrop-bottom, 0.5), accent: root.custom-theme-accent },
+        { name: "Sakura", picture: @image-url("swatches/sakura.svg"), accent: #e0709a },
+        { name: "Cyberpunk", picture: @image-url("swatches/cyberpunk.svg"), accent: #fcee0a },
+        { name: "Expedition 33", picture: @image-url("swatches/expedition-33.svg"), accent: #d4af6a },
     ];
 
     // Accent colours offered in Settings (hex strings are what gets saved).

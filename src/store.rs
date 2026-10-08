@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::model::{Note, NoteId, Reminder, UiState};
+use crate::model::{Note, NoteId, QuickTask, Reminder, UiState};
 
 /// On-disk layout (under `%APPDATA%\Zima`, or `$ZIMA_DATA_DIR` if set):
 ///
@@ -11,6 +11,7 @@ use crate::model::{Note, NoteId, Reminder, UiState};
 /// index.json      note metadata
 /// state.json      UI state
 /// reminders.json  pending reminders
+/// tasks.json      tasks added with `@due` lines
 /// stats.json      words written per day
 /// focus.json      focus-timer minutes per day
 /// ```
@@ -93,7 +94,7 @@ pub fn find_google_drive() -> Option<PathBuf> {
 pub fn copy_data(from: &Path, to: &Path) -> io::Result<usize> {
     fs::create_dir_all(to.join("notes"))?;
     let mut copied = 0;
-    for name in ["index.json", "state.json", "reminders.json", "stats.json", "focus.json"] {
+    for name in ["index.json", "state.json", "reminders.json", "tasks.json", "stats.json", "focus.json"] {
         let (src, dst) = (from.join(name), to.join(name));
         if src.exists() && !dst.exists() {
             fs::copy(&src, &dst)?;
@@ -134,6 +135,10 @@ impl Store {
         fs::metadata(self.root.join("reminders.json")).and_then(|m| m.modified()).ok()
     }
 
+    pub fn tasks_modified(&self) -> Option<std::time::SystemTime> {
+        fs::metadata(self.root.join("tasks.json")).and_then(|m| m.modified()).ok()
+    }
+
     /// When index.json last changed (to notice edits from other devices).
     pub fn index_modified(&self) -> Option<std::time::SystemTime> {
         fs::metadata(self.root.join("index.json")).and_then(|m| m.modified()).ok()
@@ -141,6 +146,13 @@ impl Store {
 
     pub fn notes_dir(&self) -> PathBuf {
         self.root.join("notes")
+    }
+
+    /// A note's text as it is on disk, and when it was written: the version about to be replaced.
+    pub fn saved_body(&self, id: NoteId) -> Option<(String, std::time::SystemTime)> {
+        let path = self.note_path(id);
+        let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+        Some((fs::read_to_string(&path).ok()?, modified))
     }
 
     fn note_path(&self, id: NoteId) -> PathBuf {
@@ -203,6 +215,28 @@ impl Store {
     pub fn save_reminders(&self, reminders: &[Reminder]) -> io::Result<()> {
         write_json(&self.root.join("reminders.json"), reminders)
     }
+
+    /// The `@due` tasks. A damaged tasks.json is first copied to `tasks.json.damaged-<unix ms>`, so the
+    /// next save (of an empty list) doesn't destroy what could still be rescued from it.
+    pub fn load_tasks(&self) -> Vec<QuickTask> {
+        let path = self.root.join("tasks.json");
+        let Ok(text) = fs::read_to_string(&path) else { return Vec::new() };
+        match serde_json::from_str(&text) {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                eprintln!("ignoring unreadable {}: {e}", path.display());
+                let backup = self.root.join(format!("tasks.json.damaged-{}", crate::model::now_ms()));
+                if let Err(e) = fs::copy(&path, &backup) {
+                    eprintln!("couldn't keep a copy of the damaged tasks.json: {e}");
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn save_tasks(&self, tasks: &[QuickTask]) -> io::Result<()> {
+        write_json(&self.root.join("tasks.json"), tasks)
+    }
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
@@ -222,7 +256,7 @@ fn write_json<T: serde::Serialize + ?Sized>(path: &Path, value: &T) -> io::Resul
 }
 
 /// Write to a temp file, then rename over the target, so a crash never leaves a half-written file.
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)
@@ -260,6 +294,42 @@ mod tests {
         let root = std::env::temp_dir().join(format!("zima-store-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         (Store::at(&root).unwrap(), root)
+    }
+
+    #[test]
+    fn tasks_save_and_load() {
+        let (store, root) = scratch_store("tasks");
+        // No file yet: no tasks.
+        assert!(store.load_tasks().is_empty());
+        let task = QuickTask { id: 1, text: "rent".into(), due: Some("2026-10-09".into()), done: false, created: 5 };
+        store.save_tasks(std::slice::from_ref(&task)).unwrap();
+        assert_eq!(store.load_tasks(), vec![task]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn damaged_tasks_file_is_kept_aside() {
+        let (store, root) = scratch_store("tasks-damaged");
+        fs::write(root.join("tasks.json"), "[{\"id\": 1, \"text\": \"rent\"").unwrap();
+        assert!(store.load_tasks().is_empty());
+        let kept = || -> Vec<String> {
+            let mut texts: Vec<String> = fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("tasks.json.damaged-"))
+                .map(|e| fs::read_to_string(e.path()).unwrap())
+                .collect();
+            texts.sort();
+            texts
+        };
+        assert_eq!(kept(), vec!["[{\"id\": 1, \"text\": \"rent\""]);
+        // Saving afterwards leaves the copy alone, and a second damaged file gets its own copy.
+        store.save_tasks(&[]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        fs::write(root.join("tasks.json"), "also bad").unwrap();
+        store.load_tasks();
+        assert_eq!(kept(), vec!["[{\"id\": 1, \"text\": \"rent\"", "also bad"]);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

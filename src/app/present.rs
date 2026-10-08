@@ -2,7 +2,7 @@
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use super::{App, md_block};
+use super::{App, Ink, md_block};
 use crate::markdown::{self, Block, Kind};
 use crate::{MdBlock, Theme};
 
@@ -38,10 +38,10 @@ impl App {
             self.toast("Open a note to present it", false);
             return;
         };
-        let dark = ui.global::<Theme>().get_dark();
+        let ink = Ink::of(&ui);
         let mut slides: Vec<Vec<MdBlock>> = split_slides(markdown::parse(&note.body))
             .into_iter()
-            .map(|slide| slide.into_iter().map(|b| md_block(b, dark)).collect())
+            .map(|slide| slide.into_iter().map(|b| md_block(b, &ink)).collect())
             .collect();
         // The title opens the show.
         let title = super::display_title(note);
@@ -49,7 +49,7 @@ impl App {
         if !note.title.is_empty() && !starts_with_heading {
             let mut heading = Block::new(Kind::Heading, format!("**{}**", markdown::escape(&title)), 0);
             heading.level = 1;
-            slides.insert(0, vec![md_block(heading, dark)]);
+            slides.insert(0, vec![md_block(heading, &ink)]);
         }
         if slides.is_empty() {
             self.toast("Nothing to present yet", false);

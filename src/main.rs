@@ -10,6 +10,7 @@ mod commands;
 mod emoji;
 mod format;
 mod highlight;
+mod history;
 mod import;
 mod instance;
 mod markdown;

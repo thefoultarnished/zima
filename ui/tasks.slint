@@ -5,6 +5,8 @@ import { Icon, IconButton, Icons, Toggle } from "widgets.slint";
 export struct TaskRow {
     // Non-empty for a group heading row ("Overdue", "Today", …); the other fields are then unused.
     header: string,
+    // Set for a task added with an `@due` line (kept in tasks.json, not in a note); note-id and line are then unused.
+    task-id: string,
     note-id: string,
     note-title: string,
     line: int,
@@ -23,6 +25,8 @@ export component TasksPopover {
     in property <length> limit-height: 600px;
     callback toggle(string, int);
     callback open-task(string, int);
+    callback quick-toggle(string);
+    callback quick-delete(string);
     callback show-done-changed(bool);
     callback close();
 
@@ -96,7 +100,7 @@ export component TasksPopover {
 
                 if root.rows.length == 0: Text {
                     height: 80px;
-                    text: "No tasks. Add some with \u{201c}- [ ] \u{2026}\u{201d} in any note (\u{201c}@due fri\u{201d} adds a date).";
+                    text: "No tasks. Type \u{201c}@due rent tomorrow\u{201d} on its own line in any note, or add checkboxes with \u{201c}- [ ] \u{2026}\u{201d}.";
                     color: Theme.muted;
                     font-size: 13px;
                     horizontal-alignment: center;
@@ -121,8 +125,13 @@ export component TasksPopover {
                         border-radius: 8px;
                         background: row-touch.has-hover ? Theme.hover : transparent;
 
+                        // Note tasks open their note; `@due` tasks have no note to open.
                         row-touch := TouchArea {
-                            clicked => { root.open-task(row.note-id, row.line); }
+                            clicked => {
+                                if (row.task-id == "") {
+                                    root.open-task(row.note-id, row.line);
+                                }
+                            }
                         }
 
                         HorizontalLayout {
@@ -150,7 +159,13 @@ export component TasksPopover {
 
                                     box-touch := TouchArea {
                                         mouse-cursor: pointer;
-                                        clicked => { root.toggle(row.note-id, row.line); }
+                                        clicked => {
+                                            if (row.task-id != "") {
+                                                root.quick-toggle(row.task-id);
+                                            } else {
+                                                root.toggle(row.note-id, row.line);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -181,7 +196,7 @@ export component TasksPopover {
                                 }
                             }
 
-                            Text {
+                            if row.task-id == "": Text {
                                 width: 120px;
                                 text: row.note-title;
                                 overflow: elide;
@@ -189,6 +204,22 @@ export component TasksPopover {
                                 font-size: 11.5px;
                                 horizontal-alignment: right;
                                 vertical-alignment: center;
+                            }
+                            // `@due` tasks aren't in a note, so this is the only way to remove one.
+                            if row.task-id != "": HorizontalLayout {
+                                width: 120px;
+                                alignment: end;
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconButton {
+                                        size: 24px;
+                                        icon-size: 13px;
+                                        description: "Delete task";
+                                        icon: Icons.trash;
+                                        hover-color: Theme.danger;
+                                        clicked => { root.quick-delete(row.task-id); }
+                                    }
+                                }
                             }
                         }
                     }

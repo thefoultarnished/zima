@@ -7,6 +7,7 @@ pub struct Command {
 
 pub const COMMANDS: &[Command] = &[
     Command { name: "remind", hint: "me to stretch in 20 min" },
+    Command { name: "due", hint: "rent tomorrow  (adds a task)" },
     Command { name: "table", hint: "3,4  (rows, columns)" },
     Command { name: "calc", hint: "12*3.5 + 8" },
     Command { name: "timer", hint: "25  (minutes of focus)" },

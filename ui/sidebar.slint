@@ -166,6 +166,7 @@ component NoteRowItem {
     callback pick-emoji();
     // Ctrl+click: add to or take out of the selection.
     callback select();
+    callback history();
 
     // Whether Ctrl was held when the click started.
     property <bool> ctrl-click;
@@ -221,6 +222,10 @@ component NoteRowItem {
             if root.kind != "bin": MenuItem {
                 title: "Move to notebook\u{2026}";
                 activated => { root.move-to-notebook(); }
+            }
+            if root.kind != "bin": MenuItem {
+                title: "Version history\u{2026}";
+                activated => { root.history(); }
             }
             if root.kind != "bin": MenuItem {
                 title: root.kind == "archive" ? "Unarchive" : "Archive";
@@ -477,6 +482,7 @@ export component Sidebar inherits Rectangle {
     callback open-on-this-day();
     callback move-to-notebook(string);
     callback pick-emoji(string);
+    callback open-history(string);
 
     background: Theme.sidebar.with-alpha(Theme.surface-alpha);
 
@@ -725,6 +731,7 @@ export component Sidebar inherits Rectangle {
                         move-to-notebook => { root.move-to-notebook(row.id); }
                         pick-emoji => { root.pick-emoji(row.id); }
                         select => { root.select-note(row.id); }
+                        history => { root.open-history(row.id); }
                     }
                 }
 
@@ -749,6 +756,7 @@ export component Sidebar inherits Rectangle {
                         move-to-notebook => { root.move-to-notebook(row.id); }
                         pick-emoji => { root.pick-emoji(row.id); }
                         select => { root.select-note(row.id); }
+                        history => { root.open-history(row.id); }
                     }
                 }
 
@@ -773,6 +781,7 @@ export component Sidebar inherits Rectangle {
                         move-to-notebook => { root.move-to-notebook(row.id); }
                         pick-emoji => { root.pick-emoji(row.id); }
                         select => { root.select-note(row.id); }
+                        history => { root.open-history(row.id); }
                     }
                 }
 
@@ -797,6 +806,7 @@ export component Sidebar inherits Rectangle {
                         move-to-notebook => { root.move-to-notebook(row.id); }
                         pick-emoji => { root.pick-emoji(row.id); }
                         select => { root.select-note(row.id); }
+                        history => { root.open-history(row.id); }
                     }
                 }
 
@@ -825,6 +835,7 @@ export component Sidebar inherits Rectangle {
                         move-to-notebook => { root.move-to-notebook(row.id); }
                         pick-emoji => { root.pick-emoji(row.id); }
                         select => { root.select-note(row.id); }
+                        history => { root.open-history(row.id); }
                     }
                 }
 
@@ -993,6 +1004,7 @@ export component Sidebar inherits Rectangle {
                         move-to-notebook => { root.move-to-notebook(row.id); }
                         pick-emoji => { root.pick-emoji(row.id); }
                         select => { root.select-note(row.id); }
+                        history => { root.open-history(row.id); }
                     }
                 }
 

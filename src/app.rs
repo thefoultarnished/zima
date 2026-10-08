@@ -18,6 +18,7 @@ mod sticky;
 mod summary;
 mod sync;
 mod tasks_view;
+mod versions;
 mod words;
 
 use std::cell::RefCell;
@@ -33,7 +34,7 @@ use slint::{ComponentHandle, Model, ModelRc, StyledText, Timer, TimerMode, VecMo
 use crate::markdown::{self, Kind};
 use crate::model::{Note, NoteId, Reminder, UiState, now_ms};
 use crate::store::Store;
-use crate::{AppWindow, MdBlock, NoteRow, ReminderRow, Suggestion, Theme};
+use crate::{AppWindow, ColourDot, MdBlock, NoteRow, ReminderRow, Suggestion, Theme};
 use crate::{commands, format, import, reminders, system, window};
 use navigate::{PaletteEntry, PaletteMode};
 
@@ -63,6 +64,8 @@ pub struct App {
     dirty: HashSet<NoteId>,
     index_dirty: bool,
     reminders: Vec<Reminder>,
+    /// Tasks added with `@due` lines (`tasks.json`).
+    quick_tasks: Vec<crate::model::QuickTask>,
     /// Open sticky-note windows.
     stickies: Vec<sticky::Sticky>,
     /// The quick-capture window, only while it's open.
@@ -78,6 +81,7 @@ pub struct App {
     /// changes made by another device (folder sync) or the command line.
     last_index_write: Option<std::time::SystemTime>,
     last_reminders_write: Option<std::time::SystemTime>,
+    last_tasks_write: Option<std::time::SystemTime>,
     /// Windows spell checker, created on first use.
     #[cfg(windows)]
     spell: Option<crate::spell::Checker>,
@@ -125,6 +129,10 @@ pub struct App {
     word_base: usize,
     /// What the lists need from each note's text, kept until the note changes.
     summaries: RefCell<summary::Summaries>,
+    /// When each note's newest history copy was made (or found on disk), so copies are kept only every few minutes.
+    last_copy: std::collections::HashMap<NoteId, i64>,
+    /// The history panel's copies of the open note (unix ms, newest first).
+    versions: Vec<i64>,
     toast_timer: Timer,
     this: rc::Weak<RefCell<App>>,
     ui: Weak<AppWindow>,
@@ -163,6 +171,7 @@ impl App {
         let notes = store.load_notes();
         let state = store.load_state();
         let reminders = store.load_reminders();
+        let quick_tasks = store.load_tasks();
         let stats = store.load_stats();
         let focus = store.load_focus();
         let app = Rc::new(RefCell::new(Self {
@@ -173,6 +182,7 @@ impl App {
             dirty: HashSet::new(),
             index_dirty: false,
             reminders,
+            quick_tasks,
             stickies: Vec::new(),
             capture: None,
             hotkeys: None,
@@ -181,6 +191,7 @@ impl App {
             focus,
             last_index_write: None,
             last_reminders_write: None,
+            last_tasks_write: None,
             #[cfg(windows)]
             spell: None,
             suggestion_at: None,
@@ -211,6 +222,8 @@ impl App {
             pause_timer: Timer::default(),
             word_base: 0,
             summaries: Default::default(),
+            last_copy: Default::default(),
+            versions: Vec::new(),
             toast_timer: Timer::default(),
             this: rc::Weak::new(),
             ui: ui.as_weak(),
@@ -243,6 +256,8 @@ impl App {
         ui.set_software_rendering(this.state.software_rendering);
         ui.set_close_to_tray(this.state.close_to_tray);
         ui.set_note_order(this.state.note_order);
+        ui.set_version_history(this.state.version_history);
+        ui.set_tasks_show_done(this.state.tasks_show_done);
         if let Some(placement) = this.state.window {
             window::restore(ui, placement);
         }
@@ -368,6 +383,7 @@ impl App {
         self.dirty.remove(&id);
         self.selected.retain(|&s| s != id);
         self.state.cursors.remove(&id);
+        self.forget_history(id);
         if let Err(e) = self.store.delete_body(id) {
             eprintln!("failed to delete note {id}: {e}");
         }
@@ -913,7 +929,14 @@ impl App {
             app.replace_body(new, Some((line_start, line_start)));
         };
 
-        if let Some(result) = reminders::parse_command(&line, now) {
+        if let Some(task) = crate::tasks::parse_due_line(&line, now) {
+            if task.text.is_empty() {
+                self.toast("Say what\u{2019}s due, like \u{201c}@due rent tomorrow\u{201d}.", true);
+                return true;
+            }
+            self.add_quick_task(task.text, task.due);
+            remove_line(self);
+        } else if let Some(result) = reminders::parse_command(&line, now) {
             let Ok(parsed) = result else {
                 self.toast("Couldn't tell when. Try \u{201c}at 5pm\u{201d} or \u{201c}in 20 min\u{201d}.", true);
                 return true;
@@ -1356,6 +1379,7 @@ impl App {
     pub fn flush(&mut self) {
         self.save_stats();
         for id in std::mem::take(&mut self.dirty) {
+            self.keep_copy(id);
             if let Some(note) = self.find(id) {
                 if let Err(e) = self.store.save_body(note) {
                     eprintln!("failed to save note {id}: {e}");
@@ -1449,8 +1473,8 @@ impl App {
         let Some(ui) = self.ui.upgrade() else { return };
         let blocks: Vec<MdBlock> = match self.current() {
             Some(note) if self.state.view_mode != 0 => {
-                let dark = ui.global::<Theme>().get_dark();
-                markdown::parse(&note.body).into_iter().map(|b| md_block(b, dark)).collect()
+                let ink = Ink::of(&ui);
+                markdown::parse(&note.body).into_iter().map(|b| md_block(b, &ink)).collect()
             }
             _ => Vec::new(),
         };
@@ -1579,11 +1603,27 @@ fn model(rows: impl Iterator<Item = NoteRow>) -> ModelRc<NoteRow> {
     ModelRc::new(VecModel::from(rows.collect::<Vec<_>>()))
 }
 
-fn md_block(block: markdown::Block, dark: bool) -> MdBlock {
+/// Colours the preview needs from the theme.
+pub struct Ink {
+    dark: bool,
+    /// For `@words`: the accent, as "#rrggbb".
+    keyword: String,
+}
+
+impl Ink {
+    pub fn of(ui: &AppWindow) -> Self {
+        let theme = ui.global::<Theme>();
+        let accent = theme.get_accent();
+        Self { dark: theme.get_dark(), keyword: format!("#{:02x}{:02x}{:02x}", accent.red(), accent.green(), accent.blue()) }
+    }
+}
+
+fn md_block(block: markdown::Block, ink: &Ink) -> MdBlock {
+    let dark = ink.dark;
     let mark = if dark { HIGHLIGHT_DARK } else { HIGHLIGHT_LIGHT };
     // A highlight that crosses bold or italic can't be drawn; show its `==` as typed instead.
     let styled = |text: &str| {
-        StyledText::from_markdown(&markdown::highlights(text, mark))
+        StyledText::from_markdown(&markdown::keywords(&markdown::highlights(text, mark, dark), &ink.keyword))
             .or_else(|_| StyledText::from_markdown(&markdown::plain_marks(text)))
             .unwrap_or_else(|_| StyledText::from_plain_text(&markdown::plain_marks(text)))
     };
@@ -1698,6 +1738,19 @@ fn parse_hex_color(hex: &str) -> Option<slint::Color> {
     }
 }
 
+/// The toolbar's colour dots: the plain highlight, then the named colours Preview knows.
+fn colour_dots() -> Vec<ColourDot> {
+    let dot = |name: &str, light: &str, dark: &str| ColourDot {
+        title: if name.is_empty() { "Highlight".into() } else { format!("{}{}", name[..1].to_uppercase(), &name[1..]).into() },
+        name: name.into(),
+        light: parse_hex_color(light).unwrap_or_default(),
+        dark: parse_hex_color(dark).unwrap_or_default(),
+    };
+    std::iter::once(dot("", HIGHLIGHT_LIGHT, HIGHLIGHT_DARK))
+        .chain(markdown::TEXT_COLOURS.iter().map(|c| dot(c.name, c.light, c.dark)))
+        .collect()
+}
+
 fn parse_id(id: &str) -> Option<NoteId> {
     id.parse().ok()
 }
@@ -1737,6 +1790,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_accept_suggestion, |a, index| a.accept_suggestion(index.max(0) as usize));
     on!(on_dismiss_suggestions, |a| a.dismiss_suggestions());
     on!(on_format, |a, kind| a.format(&kind));
+    ui.set_text_colours(ModelRc::new(VecModel::from(colour_dots())));
     on!(on_toggle_task, |a, line| a.toggle_task(line.max(0) as usize));
     on!(on_search_edited, |a, query| a.set_search(query.into()));
     on!(on_toggle_section, |a, name| a.toggle_section(&name));
@@ -1785,7 +1839,9 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
         a.link_hover(titles, x, y);
     });
     on!(on_link_hover_end, |a| a.hide_link_preview());
-    on!(on_tasks_show_done_changed, |a, _on| a.refresh_tasks());
+    on!(on_tasks_show_done_changed, |a, on| a.set_tasks_show_done(on));
+    on!(on_quick_task_toggle, |a, id| a.toggle_quick_task(&id));
+    on!(on_quick_task_delete, |a, id| a.delete_quick_task(&id));
     {
         let app = app.clone();
         ui.on_task_toggle(move |note, line| {
@@ -1874,6 +1930,10 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on_id!(on_toggle_pin, toggle_pin);
     on!(on_set_note_order, |a, order| a.set_note_order(order));
     on_id!(on_select_note, toggle_selected);
+    on_id!(on_open_history, open_history_of);
+    on!(on_history_pick, |a, index| a.pick_version(index.max(0) as usize));
+    on!(on_history_restore, |a| a.restore_version());
+    on!(on_set_version_history, |a, on| a.set_version_history(on));
     on!(on_bulk_action, |a, action| a.bulk(&action));
     on!(on_clear_selection, |a| a.clear_selection());
     on_id!(on_toggle_archive, toggle_archive);
@@ -1997,6 +2057,23 @@ fn retry_mica(app: rc::Weak<RefCell<App>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_dots_match_preview_colours() {
+        let dots = colour_dots();
+        assert_eq!(dots.len(), markdown::TEXT_COLOURS.len() + 1);
+        assert_eq!((dots[0].name.as_str(), dots[0].title.as_str()), ("", "Highlight"));
+        assert_eq!((dots[1].name.as_str(), dots[1].title.as_str()), ("red", "Red"));
+        // Every colour is valid (a bad hex would fall back to transparent).
+        for dot in &dots {
+            assert_ne!(dot.light, slint::Color::default(), "{}", dot.name);
+            assert_ne!(dot.dark, slint::Color::default(), "{}", dot.name);
+        }
+        // Every named dot is one the toolbar can apply.
+        for dot in dots.iter().skip(1) {
+            assert!(format::apply(&format!("colour:{}", dot.name), "x", 0, 1).is_some(), "{}", dot.name);
+        }
+    }
 
     #[test]
     fn step_scale_moves_by_ten_percent() {
