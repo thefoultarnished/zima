@@ -84,6 +84,8 @@ export component Editor {
     in property <int> view-mode;
     in property <bool> wide;
     in property <bool> show-status: true;
+    // The note's file couldn't be read: no editing, and a message instead of the text.
+    in property <bool> unreadable;
     in property <[MdBlock]> blocks;
     in property <[Suggestion]> suggestions;
     in-out property <int> suggestion-index;
@@ -205,6 +207,7 @@ export component Editor {
             // Fill the visible area so clicking anywhere below the text focuses it.
             height: max(self.preferred-height, scroll.visible-height - scroll.body-y);
             text <=> root.note-body;
+            read-only: root.unreadable;
             line-height-factor: Theme.line-spacing;
             single-line: false;
             wrap: word-wrap;
@@ -235,9 +238,13 @@ export component Editor {
         Text {
             x: body.x;
             y: body.y;
+            width: body.width;
             visible: root.note-body.is-empty;
-            text: "Start writing…  or try \u{201c}@remind me to stretch in 20 min\u{201d}";
-            color: Theme.muted;
+            text: root.unreadable
+                ? "Couldn\u{2019}t read this note\u{2019}s file. Your text is still in it, and Zima won\u{2019}t save over it. Close any app that has it open, or let OneDrive or Google Drive finish downloading it, then open the note again."
+                : "Start writing…  or try \u{201c}@remind me to stretch in 20 min\u{201d}";
+            wrap: word-wrap;
+            color: root.unreadable ? Theme.danger : Theme.muted;
             font-family: Theme.font;
             font-size: root.font-size;
         }

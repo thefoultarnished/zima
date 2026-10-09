@@ -105,34 +105,51 @@ impl App {
             let modified = app.store.index_modified();
             if modified.is_some() && modified != app.last_index_write {
                 app.last_index_write = modified;
-                app.reload_external();
+                if !app.reload_external() {
+                    app.last_index_write = None;
+                }
             }
             // Reminders added elsewhere (another device, or `zima remind`).
             let reminders_modified = app.store.reminders_modified();
             if reminders_modified.is_some() && reminders_modified != app.last_reminders_write {
-                app.last_reminders_write = reminders_modified;
-                app.reminders = app.store.load_reminders();
-                app.refresh_reminders();
+                // Half-written by a sync app: keep ours and look again next time.
+                match app.store.read_reminders() {
+                    Some(reminders) => {
+                        app.last_reminders_write = reminders_modified;
+                        app.reminders = reminders;
+                        app.refresh_reminders();
+                    }
+                    None => app.last_reminders_write = None,
+                }
             }
             // `@due` tasks added or ticked on another device.
             let tasks_modified = app.store.tasks_modified();
             if tasks_modified.is_some() && tasks_modified != app.last_tasks_write {
-                app.last_tasks_write = tasks_modified;
-                app.quick_tasks = app.store.load_tasks();
-                app.refresh_tasks();
+                match app.store.read_tasks() {
+                    Some(tasks) => {
+                        app.last_tasks_write = tasks_modified;
+                        app.quick_tasks = tasks;
+                        app.refresh_tasks();
+                    }
+                    None => app.last_tasks_write = None,
+                }
             }
         });
         std::mem::forget(timer);
     }
 
-    /// Merge notes changed elsewhere into what's in memory.
-    fn reload_external(&mut self) {
-        let disk = self.store.load_notes();
+    /// Merge notes changed elsewhere into what's in memory. Returns false if the note list
+    /// couldn't be read (a sync app may still be writing it), so it's tried again later.
+    fn reload_external(&mut self) -> bool {
+        let Some(disk) = self.store.read_notes() else { return false };
         let mut changed_current = false;
+        let mut replaced = Vec::new();
         let mut conflicts = 0;
         for incoming in disk {
             match self.notes.iter().position(|n| n.id == incoming.id) {
                 None => self.notes.push(incoming),
+                // Not readable on disk right now: keep what's in memory, try again next time.
+                Some(_) if incoming.unreadable => {}
                 Some(i) => {
                     let ours = &self.notes[i];
                     let same = ours.body == incoming.body && ours.title == incoming.title && ours.deleted_at == incoming.deleted_at;
@@ -150,10 +167,14 @@ impl App {
                         if Some(incoming.id) == self.state.current {
                             changed_current = true;
                         }
+                        replaced.push(incoming.id);
                         self.notes[i] = incoming;
                     }
                 }
             }
+        }
+        for id in replaced {
+            self.sync_sticky(id);
         }
         self.index_dirty = self.index_dirty || conflicts > 0;
         self.refresh_lists();
@@ -171,55 +192,11 @@ impl App {
             self.flush();
             self.toast(&format!("{conflicts} note(s) changed on two devices; both versions kept"), false);
         }
+        true
     }
 }
 
 impl App {
-    /// Listen for clips from the browser extension (clipper/).
-    pub fn start_clipper(&mut self) {
-        if self.state.clip_token.is_empty() {
-            self.state.clip_token = crate::clip::new_token();
-            self.save_state();
-        }
-        if let Some(ui) = self.ui.upgrade() {
-            ui.set_clip_token(self.state.clip_token.as_str().into());
-        }
-        let receiver = match crate::clip::start(self.state.clip_token.clone()) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("web clipper unavailable (is another Zima running?): {e}");
-                return;
-            }
-        };
-        let app = self.this.clone();
-        let poll = Timer::default();
-        poll.start(TimerMode::Repeated, Duration::from_millis(300), move || {
-            while let Ok(clip) = receiver.try_recv() {
-                if let Some(app) = app.upgrade() {
-                    super::with_app(&app, move |a| a.add_clip(clip));
-                }
-            }
-        });
-        std::mem::forget(poll);
-    }
-
-    fn add_clip(&mut self, clip: crate::clip::Clip) {
-        let id = self.next_note_id();
-        let title = if clip.title.is_empty() { "Web clip".to_string() } else { clip.title.clone() };
-        let body = crate::clip::to_markdown(&clip);
-        self.notes.push(Note { id, title: title.clone(), body, created: now_ms(), modified: now_ms(), ..Default::default() });
-        self.dirty.insert(id);
-        self.index_dirty = true;
-        self.flush();
-        self.refresh_lists();
-        super::show_notification("Clipped to Zima", &title);
-    }
-
-    pub fn copy_clip_token(&mut self) {
-        let copied = arboard::Clipboard::new().and_then(|mut c| c.set_text(self.state.clip_token.clone())).is_ok();
-        self.toast(if copied { "Token copied: paste it into the clipper's popup" } else { "Couldn't copy" }, !copied);
-    }
-
     /// Import a folder of Markdown files (an Obsidian vault, a notes folder …).
     pub fn import_markdown_folder(&mut self) {
         let Some(folder) = rfd::FileDialog::new().set_title("Import a folder of Markdown notes").pick_folder() else { return };
@@ -257,8 +234,8 @@ fn merge_into(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to.join("notes"))?;
     let source = Store::at(from)?;
     let target = Store::at(to)?;
-    let mut merged = target.load_notes();
-    for note in source.load_notes() {
+    let (mut merged, _) = target.load_notes();
+    for note in source.load_notes().0 {
         match merged.iter().position(|n| n.id == note.id) {
             Some(i) if merged[i].modified >= note.modified => {}
             Some(i) => merged[i] = note,

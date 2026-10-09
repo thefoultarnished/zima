@@ -514,7 +514,6 @@ export component SettingsWindow {
     // "Clear history" was clicked once; the second click deletes.
     property <bool> clear-armed;
     in property <bool> has-note;
-    in property <string> clip-token;
     in property <string> sync-location;
     in property <bool> sync-active;
     in property <string> google-drive-path;
@@ -544,7 +543,6 @@ export component SettingsWindow {
     callback import-zima();
     callback open-notes-folder();
     callback open-backups-folder();
-    callback copy-clip-token();
     callback set-shortcut(string, string);
     callback reset-shortcut(string);
     callback shortcut-filter-edited(string);
@@ -558,7 +556,6 @@ export component SettingsWindow {
         { id: "general", title: "General", icon: Icons.settings },
         { id: "sync", title: "Sync and backups", icon: Icons.folder },
         { id: "files", title: "Import and export", icon: Icons.export },
-        { id: "clipper", title: "Web clipper", icon: Icons.import },
         { id: "shortcuts", title: "Keyboard shortcuts", icon: Icons.keyboard },
     ];
 
@@ -914,52 +911,6 @@ export component SettingsWindow {
                                 icon: Icons.import;
                                 label: "Import from Zima\u{2026}";
                                 clicked => { root.import-zima(); }
-                            }
-                        }
-
-                        if root.page == "clipper": VerticalLayout {
-                            spacing: 8px;
-                            Hint {
-                                text: "Send pages and selections from Chrome or Edge to Zima. Load the \u{201c}clipper\u{201d} folder (in the Zima project) at chrome://extensions with Developer mode on (\u{201c}Load unpacked\u{201d}), then paste this token into its popup:";
-                            }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                Rectangle {
-                                    horizontal-stretch: 1;
-                                    height: 28px;
-                                    border-radius: 6px;
-                                    background: Theme.hover;
-                                    Text {
-                                        x: 8px;
-                                        width: parent.width - 16px;
-                                        height: parent.height;
-                                        text: root.clip-token;
-                                        color: Theme.ink;
-                                        font-family: "JetBrains Mono";
-                                        font-size: 11.5px;
-                                        overflow: elide;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                                Rectangle {
-                                    width: copy-label.preferred-width + 18px;
-                                    height: 28px;
-                                    border-radius: 6px;
-                                    background: copy-touch.has-hover ? Theme.selected : Theme.hover;
-                                    accessible-role: button;
-                                    accessible-label: "Copy token";
-                                    accessible-action-default => { root.copy-clip-token(); }
-                                    copy-label := Text {
-                                        text: "Copy";
-                                        color: Theme.ink-soft;
-                                        font-size: 12px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                    copy-touch := TouchArea {
-                                        clicked => { root.copy-clip-token(); }
-                                    }
-                                }
                             }
                         }
                     }

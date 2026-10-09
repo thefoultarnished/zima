@@ -107,6 +107,9 @@ impl App {
         let index = ui.get_history_index().max(0) as usize;
         let (Some(note), Some(&time)) = (self.current(), self.versions.get(index)) else { return };
         let (id, body) = (note.id, note.body.clone());
+        if !self.can_change(id) {
+            return;
+        }
         let Ok(dir) = history::folder() else { return };
         let Ok(copy) = history::read(&dir, id, time) else {
             self.toast("Couldn't read that version", true);

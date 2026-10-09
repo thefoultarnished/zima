@@ -139,8 +139,6 @@ export component AppWindow inherits Window {
     in-out property <bool> stats-open;
     in property <StatSummary> stats-summary;
     in property <[StatCell]> stats-cells;
-    in property <string> clip-token;
-    callback copy-clip-token();
     // Sync
     in property <string> sync-location;
     in property <bool> sync-active;
@@ -179,6 +177,8 @@ export component AppWindow inherits Window {
     in property <string> current-id;
     in-out property <string> note-title;
     in-out property <string> note-body;
+    // The open note's file couldn't be read: show a message, don't allow editing.
+    in property <bool> note-unreadable;
     in property <int> note-words;
     in property <[MdBlock]> blocks;
     out property <int> sel-anchor: editor.sel-anchor;
@@ -979,6 +979,7 @@ export component AppWindow inherits Window {
                     current-id: root.current-id;
                     note-title <=> root.note-title;
                     note-body <=> root.note-body;
+                    unreadable: root.note-unreadable;
                     note-words: root.note-words;
                     view-mode: root.view-mode;
                     wide: root.wide;
@@ -1190,7 +1191,6 @@ export component AppWindow inherits Window {
             close-to-tray <=> root.close-to-tray;
             version-history <=> root.version-history;
             has-note: root.has-note;
-            clip-token: root.clip-token;
             sync-location: root.sync-location;
             sync-active: root.sync-active;
             google-drive-path: root.google-drive-path;
@@ -1218,7 +1218,6 @@ export component AppWindow inherits Window {
             import-zima => { root.import-zima(); }
             open-notes-folder => { root.open-notes-folder(); }
             open-backups-folder => { root.open-backups-folder(); }
-            copy-clip-token => { root.copy-clip-token(); }
             set-shortcut(id, combo) => { root.set-shortcut(id, combo); }
             reset-shortcut(id) => { root.reset-shortcut(id); }
             shortcut-filter-edited(text) => { root.shortcut-filter-edited(text); }

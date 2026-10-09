@@ -177,3 +177,25 @@ fn add_keeps_existing_note_emoji() {
     assert_eq!(by_id(2)["emoji"], "🎉");
     assert!(by_id(1)["emoji"].is_null());
 }
+
+#[test]
+fn add_with_a_damaged_note_list_keeps_every_note() {
+    let data = DataDir::new("damaged-index");
+    std::fs::create_dir_all(data.path().join("notes")).unwrap();
+    std::fs::write(data.path().join("notes").join("1.md"), "old note").unwrap();
+    std::fs::write(data.path().join("index.json"), "[{\"id\": 1, \"ti").unwrap();
+
+    assert!(data.zima(&["add", "buy milk"]).status.success());
+
+    // The old note is still listed next to the new one, and the damaged list was kept.
+    let index = data.json("index.json");
+    let ids: Vec<u64> = index.as_array().unwrap().iter().map(|n| n["id"].as_u64().unwrap()).collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&1));
+    let kept = std::fs::read_dir(data.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("index.json.damaged-"))
+        .count();
+    assert_eq!(kept, 1);
+}

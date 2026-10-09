@@ -57,16 +57,6 @@ While you edit, Zima keeps an older copy of each note about every 10 minutes: ev
 
 Once a day Zima zips your whole notes folder into `%APPDATA%\Zima\backups` and keeps the last 14. Backups always stay on this PC, even when your notes are in a synced folder. **Back up now** in Settings makes one straight away, and **Open backups folder** shows them. To get notes back, unzip a backup into your notes folder while Zima is closed.
 
-## Web clipper
-
-The `clipper/` folder is a small browser extension for Chrome and Edge that sends the page you're reading, or just the text you've selected, into Zima as a new note.
-
-1. Open `chrome://extensions`, turn on Developer mode and choose **Load unpacked**, then pick the `clipper` folder.
-2. In Zima, open Settings and copy the web clipper token.
-3. Paste it into the extension's popup.
-
-The extension only talks to Zima on your own computer (`127.0.0.1`) and needs that token, so other programs and websites can't add notes.
-
 ## Command line
 
 A few things work without opening the window at all:

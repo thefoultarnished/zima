@@ -14,6 +14,9 @@ pub struct Sticky {
 
 impl App {
     pub fn open_sticky(&mut self, id: NoteId) {
+        if !self.can_change(id) {
+            return;
+        }
         if let Some(sticky) = self.stickies.iter().find(|s| s.note == id) {
             let _ = sticky.window.show();
             return;
@@ -84,6 +87,9 @@ impl App {
     }
 
     pub fn close_sticky(&mut self, id: NoteId) {
+        if !self.stickies.iter().any(|s| s.note == id) && !self.state.stickies.contains(&id) {
+            return;
+        }
         if let Some(index) = self.stickies.iter().position(|s| s.note == id) {
             let sticky = self.stickies.remove(index);
             let _ = sticky.window.hide();
@@ -106,6 +112,9 @@ impl App {
 
     /// Edit from a sticky window (which may not be the note open in the editor).
     pub fn set_body_of(&mut self, id: NoteId, body: String) {
+        if !self.can_change(id) {
+            return;
+        }
         let Some(note) = self.find_mut(id) else { return };
         let before_words = note.body.split_whitespace().count();
         note.body = body;
@@ -115,6 +124,8 @@ impl App {
         self.dirty.insert(id);
         self.index_dirty = true;
         self.schedule_save();
+        // From the Tasks view, not the sticky itself: show the change there too.
+        self.sync_sticky(id);
         if self.state.current == Some(id) {
             if let (Some(ui), Some(note)) = (self.ui.upgrade(), self.find(id)) {
                 ui.set_note_body(note.body.as_str().into());

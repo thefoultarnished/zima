@@ -34,7 +34,7 @@ winreg = "0.56.0"
 
 # Smaller and faster than the default release build: whole-program optimisation, no debug info.
 # Panics still unwind (no `panic = "abort"`), so a crash in a background thread (spell check,
-# clipper, backup) doesn't take the app and unsaved typing down with it.
+# backup) doesn't take the app and unsaved typing down with it.
 [profile.release]
 lto = true
 codegen-units = 1

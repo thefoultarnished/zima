@@ -40,6 +40,8 @@ use navigate::{PaletteEntry, PaletteMode};
 
 /// How long to wait after the last keystroke before writing to disk.
 const SAVE_DELAY: Duration = Duration::from_millis(500);
+/// How soon to try again after a save failed (disk full, sync folder gone, file locked).
+const SAVE_RETRY: Duration = Duration::from_secs(10);
 /// How long typing must pause before the preview is redrawn and words are counted. Doing either
 /// on every key made typing in a long note lag.
 const PAUSE_DELAY: Duration = Duration::from_millis(150);
@@ -134,6 +136,8 @@ pub struct App {
     /// The history panel's copies of the open note (unix ms, newest first).
     versions: Vec<i64>,
     toast_timer: Timer,
+    /// The last save failed and the user was told; cleared (with a message) once saving works again.
+    save_failed: bool,
     this: rc::Weak<RefCell<App>>,
     ui: Weak<AppWindow>,
 }
@@ -148,6 +152,8 @@ enum ToastAction {
     OpenNote(NoteId),
     Restart,
     ShowBackups,
+    /// The folder holding index.json (and the copy of a damaged one).
+    ShowDataFolder,
 }
 
 struct FocusTimer {
@@ -168,7 +174,7 @@ struct Snapshot {
 impl App {
     /// `import`: Zima files to import before showing anything (from `--import`).
     pub fn load(store: Store, ui: &AppWindow, import: &[PathBuf]) -> Rc<RefCell<Self>> {
-        let notes = store.load_notes();
+        let (notes, rebuilt) = store.load_notes();
         let state = store.load_state();
         let reminders = store.load_reminders();
         let quick_tasks = store.load_tasks();
@@ -225,6 +231,7 @@ impl App {
             last_copy: Default::default(),
             versions: Vec::new(),
             toast_timer: Timer::default(),
+            save_failed: false,
             this: rc::Weak::new(),
             ui: ui.as_weak(),
         }));
@@ -277,11 +284,18 @@ impl App {
         this.register_capture_hotkey();
         this.watch_for_external_changes();
         this.watch_custom_theme();
-        this.start_clipper();
         this.refresh_sync_ui();
         this.refresh_reminders();
         // Anything that came due while the app was closed.
         this.fire_due_reminders(true);
+        if rebuilt > 0 {
+            let notes = if rebuilt == 1 { "1 note".to_string() } else { format!("{rebuilt} notes") };
+            this.toast_with(
+                &format!("Zima's list of notes was damaged, so it was rebuilt from your {notes}. Titles show as each note's first line; a copy of the old list is kept in Zima\u{2019}s data folder."),
+                true,
+                vec![("Open folder".to_string(), ToastAction::ShowDataFolder)],
+            );
+        }
         drop(this);
         app
     }
@@ -367,6 +381,7 @@ impl App {
         self.index_dirty = true;
         self.flush();
         self.close(id);
+        self.close_sticky(id);
     }
 
     pub fn restore(&mut self, id: NoteId) {
@@ -383,6 +398,7 @@ impl App {
         self.dirty.remove(&id);
         self.selected.retain(|&s| s != id);
         self.state.cursors.remove(&id);
+        self.close_sticky(id);
         self.forget_history(id);
         if let Err(e) = self.store.delete_body(id) {
             eprintln!("failed to delete note {id}: {e}");
@@ -465,6 +481,9 @@ impl App {
     }
 
     fn set_body_from_rust(&mut self, body: String, selection: Option<(usize, usize)>, record: bool) {
+        if self.state.current.is_some_and(|id| !self.can_change(id)) {
+            return;
+        }
         // Typing so far counts for the stats; this edit, made by Zima, doesn't.
         self.count_words();
         let cursor_before = self.cursor;
@@ -491,6 +510,7 @@ impl App {
             }
         }
         self.after_body_change();
+        self.sync_sticky(id);
     }
 
     /// Ctrl+Z: undo the last Rust-made edit if the text is still exactly as it left it.
@@ -1008,12 +1028,12 @@ impl App {
     }
 
     fn add_reminder(&mut self, note_id: NoteId, text: String, due: i64, repeat: Option<reminders::Repeat>) {
-        let max_id = self.reminders.iter().map(|r| r.id).max().unwrap_or(0);
+        let id = crate::model::next_id(self.reminders.iter().map(|r| r.id), now_ms());
         let now = Local::now();
         let due_text = Local.timestamp_millis_opt(due).single().map(|d| reminders::format_due(d, now)).unwrap_or_default();
         let repeat_text = repeat.as_ref().map(|r| format!(" \u{00b7} {}", r.describe())).unwrap_or_default();
         self.toast(&format!("Reminder set: {text} \u{2014} {due_text}{repeat_text}"), false);
-        self.reminders.push(Reminder { id: (now_ms() as u64).max(max_id + 1), note_id, text, due, repeat });
+        self.reminders.push(Reminder { id, note_id, text, due, repeat });
         self.save_reminders();
         self.refresh_reminders();
     }
@@ -1337,7 +1357,9 @@ impl App {
                         Local.from_local_datetime(&tomorrow.and_time(nine)).earliest().unwrap_or(now)
                     }
                 };
-                self.reminders.push(Reminder { due: due.timestamp_millis(), repeat: None, ..reminder });
+                // Its own id: a repeating reminder is already back in the list under the old one.
+                let id = crate::model::next_id(self.reminders.iter().map(|r| r.id), now_ms());
+                self.reminders.push(Reminder { id, due: due.timestamp_millis(), repeat: None, ..reminder });
                 self.save_reminders();
                 self.refresh_reminders();
                 self.toast(&format!("Snoozed until {}", reminders::format_due(due, now)), false);
@@ -1355,6 +1377,7 @@ impl App {
             }
             ToastAction::Restart => self.restart(),
             ToastAction::ShowBackups => self.open_backups_folder(),
+            ToastAction::ShowDataFolder => system::reveal(self.store.root()),
         }
     }
 
@@ -1362,8 +1385,12 @@ impl App {
 
     /// Save shortly after the last change; every call restarts the timer.
     fn schedule_save(&self) {
+        self.schedule_save_in(SAVE_DELAY);
+    }
+
+    fn schedule_save_in(&self, delay: Duration) {
         let this = self.this.clone();
-        self.save_timer.start(TimerMode::SingleShot, SAVE_DELAY, move || {
+        self.save_timer.start(TimerMode::SingleShot, delay, move || {
             if let Some(app) = this.upgrade() {
                 let mut app = app.borrow_mut();
                 app.flush();
@@ -1375,15 +1402,16 @@ impl App {
         });
     }
 
-    /// Write pending changes to disk.
+    /// Write pending changes to disk. Anything that fails stays pending and is tried again.
     pub fn flush(&mut self) {
         self.save_stats();
+        let mut error = None;
         for id in std::mem::take(&mut self.dirty) {
             self.keep_copy(id);
-            if let Some(note) = self.find(id) {
-                if let Err(e) = self.store.save_body(note) {
-                    eprintln!("failed to save note {id}: {e}");
-                }
+            if let Some(Err(e)) = self.find(id).map(|note| self.store.save_body(note)) {
+                eprintln!("failed to save note {id}: {e}");
+                self.dirty.insert(id);
+                error = Some(e);
             }
         }
         if self.index_dirty {
@@ -1392,9 +1420,52 @@ impl App {
                     self.index_dirty = false;
                     self.last_index_write = self.store.index_modified();
                 }
-                Err(e) => eprintln!("failed to save index: {e}"),
+                Err(e) => {
+                    eprintln!("failed to save index: {e}");
+                    error = Some(e);
+                }
             }
         }
+        self.after_save(error);
+    }
+
+    /// Say so when saving starts failing (once, not on every retry) and when it works again.
+    fn after_save(&mut self, error: Option<std::io::Error>) {
+        match error {
+            Some(e) => {
+                if !self.save_failed {
+                    self.save_failed = true;
+                    self.toast(&format!("Couldn't save your notes ({e}). Zima keeps trying; don't quit until it says they're saved."), true);
+                }
+                self.schedule_save_in(SAVE_RETRY);
+            }
+            None if self.save_failed => {
+                self.save_failed = false;
+                self.toast("Your notes are saved again.", false);
+            }
+            None => {}
+        }
+    }
+
+    /// The open note's file couldn't be read before: try again (it may have finished syncing).
+    fn read_again_if_unreadable(&mut self) {
+        let Some(id) = self.state.current else { return };
+        if !self.find(id).is_some_and(|n| n.unreadable) {
+            return;
+        }
+        if let (Some(body), Some(note)) = (self.store.read_body(id), self.find_mut(id)) {
+            note.body = body;
+            note.unreadable = false;
+        }
+    }
+
+    /// Whether note `id` can be changed; if its file couldn't be read, say so and refuse.
+    fn can_change(&mut self, id: NoteId) -> bool {
+        if !self.find(id).is_some_and(|n| n.unreadable) {
+            return true;
+        }
+        self.toast("This note\u{2019}s file couldn\u{2019}t be read, so Zima won\u{2019}t change it. Close any app using it or let it finish syncing, then open the note again.", true);
+        false
     }
 
     fn save_state(&self) {
@@ -1411,15 +1482,18 @@ impl App {
         // Words just typed in the note being left still count.
         self.count_words();
         self.note_cursor();
+        self.read_again_if_unreadable();
         match self.current() {
             Some(note) => {
                 ui.set_has_note(true);
+                ui.set_note_unreadable(note.unreadable);
                 ui.set_current_id(note.id.to_string().into());
                 ui.set_note_title(note.title.as_str().into());
                 ui.set_note_body(note.body.as_str().into());
             }
             None => {
                 ui.set_has_note(false);
+                ui.set_note_unreadable(false);
                 ui.set_current_id("".into());
                 ui.set_note_title("".into());
                 ui.set_note_body("".into());
@@ -1823,7 +1897,6 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_look_up_word, |a| a.look_up_word());
     on!(on_open_tasks, |a| a.open_tasks());
     on!(on_use_google_drive, |a| a.use_google_drive());
-    on!(on_copy_clip_token, |a| a.copy_clip_token());
     on!(on_choose_sync_folder, |a| a.choose_sync_folder());
     on!(on_stop_syncing, |a| a.stop_syncing());
     on!(on_import_markdown_folder, |a| a.import_markdown_folder());

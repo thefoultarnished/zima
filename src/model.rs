@@ -33,6 +33,10 @@ pub struct Note {
     /// Per-note overrides of the global font and wide layout.
     pub font: Option<String>,
     pub wide: Option<bool>,
+    /// Its file exists but couldn't be read (still syncing, locked, not UTF-8), so its text isn't
+    /// known: it's shown as unreadable and never saved over.
+    #[serde(skip)]
+    pub unreadable: bool,
 }
 
 impl Note {
@@ -98,8 +102,6 @@ pub struct UiState {
     pub spotlight: bool,
     /// Custom accent colour ("#rrggbb"); the theme's own when unset.
     pub accent: Option<String>,
-    /// Secret the browser clipper must send (shown in Settings).
-    pub clip_token: String,
     /// Saved searches shown in the sidebar.
     pub saved_searches: Vec<String>,
     /// Notes popped out as sticky notes, reopened at launch.
@@ -158,7 +160,6 @@ impl Default for UiState {
             accent: None,
             stickies: Vec::new(),
             saved_searches: Vec::new(),
-            clip_token: String::new(),
             close_to_tray: true,
             tray_hint_shown: false,
             shortcuts: Default::default(),
@@ -174,6 +175,12 @@ impl Default for UiState {
 
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// A new id for a note or reminder: the time in ms (`now`), or one past the biggest id in use if
+/// that's later, so it never repeats one of `existing`.
+pub fn next_id(existing: impl Iterator<Item = u64>, now: i64) -> u64 {
+    (now.max(0) as u64).max(existing.max().map_or(0, |m| m + 1))
 }
 
 /// A scheduled `@remind`, stored in `reminders.json`. Removed once it fires.
@@ -207,6 +214,23 @@ pub struct QuickTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_id_is_the_time_unless_taken() {
+        assert_eq!(next_id([1, 5].into_iter(), 1000), 1000);
+        // An id at or after now is already used (same millisecond, or ids from a faster clock).
+        assert_eq!(next_id([1000].into_iter(), 1000), 1001);
+        assert_eq!(next_id([3000, 7].into_iter(), 1000), 3001);
+    }
+
+    #[test]
+    fn next_id_edges() {
+        assert_eq!(next_id(std::iter::empty(), 1000), 1000);
+        assert_eq!(next_id(std::iter::empty(), 0), 0);
+        assert_eq!(next_id([0].into_iter(), 0), 1);
+        // A clock set before 1970 never gives a huge id.
+        assert_eq!(next_id(std::iter::empty(), -5), 0);
+    }
 
     #[test]
     fn quick_task_round_trips_and_old_files_load() {

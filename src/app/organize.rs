@@ -59,10 +59,14 @@ impl App {
         }
         self.index_dirty = true;
         self.flush();
-        // Notes that left the main lists also leave Active, like closing them one by one.
+        // Notes that left the main lists also leave Active, like closing them one by one; binned
+        // ones also close their sticky.
         for &id in &changed {
             if !self.find(id).is_some_and(Note::is_listed) {
                 self.close(id);
+            }
+            if !self.find(id).is_some_and(Note::is_live) {
+                self.close_sticky(id);
             }
         }
         self.refresh_lists();
@@ -110,6 +114,9 @@ impl App {
     }
 
     pub fn duplicate(&mut self, id: NoteId) {
+        if !self.can_change(id) {
+            return;
+        }
         let Some(original) = self.find(id).cloned() else { return };
         let new_id = self.next_note_id();
         let title = if original.title.trim().is_empty() { String::new() } else { format!("{} (copy)", original.title.trim()) };
@@ -132,7 +139,7 @@ impl App {
     /// Append the current note to `target` and move the current one to the Bin.
     pub fn merge_current_into(&mut self, target: NoteId) {
         let Some(source) = self.current().cloned() else { return };
-        if source.id == target {
+        if source.id == target || !self.can_change(source.id) || !self.can_change(target) {
             return;
         }
         let Some(note) = self.find_mut(target) else { return };
@@ -142,6 +149,7 @@ impl App {
         note.modified = now_ms();
         let name = display_title(note);
         self.dirty.insert(target);
+        self.sync_sticky(target);
         self.delete(source.id);
         self.open(target);
         self.toast(&format!("Merged into \u{201c}{name}\u{201d}"), false);
@@ -216,8 +224,7 @@ impl App {
     }
 
     pub fn next_note_id(&self) -> NoteId {
-        let max_id = self.notes.iter().map(|n| n.id).max().unwrap_or(0);
-        (now_ms() as NoteId).max(max_id + 1)
+        crate::model::next_id(self.notes.iter().map(|n| n.id), now_ms())
     }
 
     // ----- Per-note font and width -----
