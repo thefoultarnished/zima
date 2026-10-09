@@ -20,7 +20,7 @@ export global Theme {
     in-out property <color> custom-accent;
     // Opacity of the window surfaces (0.3–1.0); below 1 the Mica backdrop shows through.
     in-out property <float> surface-alpha: 1.0;
-    // Font for note text; the UI chrome stays Segoe UI.
+    // Font for note text; the rest of the interface is always Inter.
     in-out property <string> font: "Inter";
     // Ctrl + / Ctrl − text size, and line spacing, for note text.
     in-out property <float> text-scale: 1.0;
@@ -77,6 +77,12 @@ export global Theme {
     out property <color> on-accent: root.has-custom-accent ? #ffffff : root.custom ? root.custom-on-accent : root.on-accents[root.i];
     out property <color> popover: root.custom ? root.custom-popover : root.popovers[root.i];
     out property <color> selection: root.accent.with-alpha(root.dark ? 0.35 : 0.22);
+    // Note titles and headings: the accent, deepened a little with the text colour so long
+    // headings stay readable. Follows a custom accent too.
+    out property <color> heading: root.accent.mix(root.ink, 0.8);
+    // How much of the window background shows through the notes list, so the theme's gradient
+    // reaches the whole window instead of stopping at the sidebar.
+    out property <float> sidebar-alpha: 0.55;
     out property <color> danger: #e5484d;
 
     // Window background: Zima's gradients for its themes, plain paper otherwise.
@@ -116,5 +122,5 @@ export global Theme {
 
     // Bundled fonts (see fonts/).
     out property <[string]> fonts: ["Inter", "Newsreader", "Literata", "JetBrains Mono"];
-    out property <[string]> font-labels: ["Sans", "Serif", "Book", "Mono"];
+    out property <[string]> font-labels: ["Inter", "Newsreader", "Literata", "JetBrains Mono"];
 }

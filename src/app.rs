@@ -424,6 +424,16 @@ impl App {
 
     /// Called on every keystroke in the title.
     pub fn set_title(&mut self, title: String) {
+        // The title box wraps but holds one line: a pasted line break becomes a space.
+        let title = match one_line(&title) {
+            Some(fixed) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_note_title(fixed.as_str().into());
+                }
+                fixed
+            }
+            None => title,
+        };
         let Some(note) = self.current_mut() else { return };
         note.title = title;
         note.modified = now_ms();
@@ -1830,6 +1840,11 @@ fn show_notification(title: &str, body: &str) {
     });
 }
 
+/// `text` with its line breaks turned into spaces, or `None` if it has none.
+fn one_line(text: &str) -> Option<String> {
+    text.contains(['\n', '\r']).then(|| text.replace("\r\n", " ").replace(['\r', '\n'], " "))
+}
+
 /// The notes list's width, kept between 180 and 480 px (the same limits as dragging in `ui/app.slint`).
 fn clamp_sidebar_width(width: f32) -> f32 {
     if width.is_finite() { width.clamp(180.0, 480.0) } else { 260.0 }
@@ -2182,6 +2197,14 @@ fn retry_mica(app: rc::Weak<RefCell<App>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titles_stay_on_one_line() {
+        assert_eq!(one_line("Trip to Lisbon"), None);
+        assert_eq!(one_line(""), None);
+        assert_eq!(one_line("Trip\nto Lisbon").as_deref(), Some("Trip to Lisbon"));
+        assert_eq!(one_line("Trip\r\nto\rLisbon\n").as_deref(), Some("Trip to Lisbon "));
+    }
 
     #[test]
     fn divider_sizes_stay_in_range() {

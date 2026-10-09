@@ -484,7 +484,7 @@ export component Sidebar inherits Rectangle {
     callback pick-emoji(string);
     callback open-history(string);
 
-    background: Theme.sidebar.with-alpha(Theme.surface-alpha);
+    background: Theme.sidebar.with-alpha(Theme.surface-alpha * Theme.sidebar-alpha);
 
     VerticalLayout {
         // Top strip lines up with the main title bar and drags the window.

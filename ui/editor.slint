@@ -166,37 +166,50 @@ export component Editor {
         property <length> column-x: (self.visible-width - self.column-width) / 2;
         property <length> pad-top: 36px;
         property <length> pad-bottom: root.typewriter ? self.visible-height * 0.55 : 120px;
-        property <length> body-y: title.y + title.height + 14px;
+        property <length> body-y: title-box.y + title-box.height + 14px;
         property <Point> cursor;
 
         content-width: self.visible-width;
         content-height: max(self.visible-height, self.body-y + body.preferred-height + self.pad-bottom);
 
-        title := TextInput {
+        // The title wraps onto more lines when the pane is narrow. It's still one line of text:
+        // Enter is caught here before the title sees it and moves on to the body instead.
+        title-box := FocusScope {
             x: scroll.column-x;
             y: scroll.pad-top;
             width: scroll.column-width;
-            height: 40px * Theme.text-scale;
-            text <=> root.note-title;
-            single-line: true;
-            font-family: Theme.font;
-            font-size: 28px * Theme.text-scale;
-            font-weight: 700;
-            color: Theme.ink;
-            selection-background-color: Theme.selection;
-            selection-foreground-color: Theme.ink;
-            edited => {
-                root.title-edited(self.text);
+            height: title.height;
+            capture-key-pressed(event) => {
+                if (title.has-focus && event.text == Key.Return) {
+                    body.focus();
+                    return accept;
+                }
+                return reject;
             }
-            // Enter moves on to the body.
-            accepted => {
-                body.focus();
+
+            title := TextInput {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: max(40px * Theme.text-scale, self.preferred-height);
+                text <=> root.note-title;
+                single-line: false;
+                wrap: word-wrap;
+                font-family: Theme.font;
+                font-size: 28px * Theme.text-scale;
+                font-weight: 700;
+                color: Theme.heading;
+                selection-background-color: Theme.selection;
+                selection-foreground-color: Theme.ink;
+                edited => {
+                    root.title-edited(self.text);
+                }
             }
         }
 
         Text {
-            x: title.x;
-            y: title.y;
+            x: title-box.x;
+            y: title-box.y;
             visible: root.note-title.is-empty;
             text: "Untitled";
             color: Theme.muted.with-alpha(0.6);
@@ -384,7 +397,7 @@ export component Editor {
 
             Text {
                 text: root.note-title.is-empty ? "Untitled" : root.note-title;
-                color: root.note-title.is-empty ? Theme.muted.with-alpha(0.6) : Theme.ink;
+                color: root.note-title.is-empty ? Theme.muted.with-alpha(0.6) : Theme.heading;
                 font-family: Theme.font;
                 font-size: 28px * Theme.text-scale;
                 font-weight: 700;

@@ -285,6 +285,8 @@ component FontPicker {
         for font[i] in Theme.fonts: Rectangle {
             property <bool> selected: Theme.font == font;
             height: 34px;
+            // Equal widths whatever the name's length (a long name is shortened with "…").
+            preferred-width: 0px;
             horizontal-stretch: 1;
             border-radius: 8px;
             background: self.selected ? Theme.selected : font-touch.has-hover ? Theme.hover : transparent;
@@ -312,6 +314,7 @@ component FontPicker {
                     font-size: 9.5px;
                     color: Theme.muted;
                     horizontal-alignment: center;
+                    overflow: elide;
                 }
             }
         }
