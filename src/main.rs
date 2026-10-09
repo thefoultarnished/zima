@@ -6,6 +6,7 @@ mod backup;
 mod calc;
 mod cli;
 mod commands;
+mod currency;
 mod emoji;
 mod format;
 mod highlight;
@@ -21,6 +22,7 @@ mod spell;
 mod store;
 mod system;
 mod tasks;
+mod timezones;
 mod transfer;
 mod window;
 

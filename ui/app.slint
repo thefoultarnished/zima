@@ -334,6 +334,9 @@ export component AppWindow inherits Window {
     callback set-wide(bool);
     callback set-view-mode(int);
     callback set-format-bar(bool);
+    // A divider was dragged or double-clicked; Rust saves the new size.
+    callback sidebar-resized(length);
+    callback split-resized(float);
     callback set-launch-at-login(bool);
     callback set-software-rendering(bool);
     callback set-close-to-tray(bool);
@@ -435,7 +438,12 @@ export component AppWindow inherits Window {
     }
 
     property <length> bar-height: 44px;
-    property <length> sidebar-width: 260px;
+    // Set from Rust (saved); dragged by the handle on the sidebar's edge.
+    in-out property <length> sidebar-width: 260px;
+    // The sidebar's edge is being dragged: no slide animation, so it keeps up with the pointer.
+    property <bool> sidebar-dragging;
+    // Share of the width the text gets in Split view; set from Rust (saved).
+    in-out property <float> split-ratio: 0.5;
     property <length> edge: 5px;
     property <length> corner: 10px;
 
@@ -596,7 +604,7 @@ export component AppWindow inherits Window {
             // Sidebar slides open and closed (and hides in zen mode).
             Rectangle {
                 width: root.sidebar-open && !root.zen ? root.sidebar-width : 0px;
-                animate width { duration: 220ms; easing: ease-out; }
+                animate width { duration: root.sidebar-dragging ? 0ms : 220ms; easing: ease-out; }
                 clip: true;
 
                 Sidebar {
@@ -667,7 +675,30 @@ export component AppWindow inherits Window {
                 Rectangle {
                     x: parent.width - 1px;
                     width: 1px;
-                    background: Theme.rule;
+                    background: sidebar-edge.has-hover || root.sidebar-dragging ? Theme.accent : Theme.rule;
+                }
+
+                // Drag to resize (180 to 480 px, as in Rust); double-click for the default width.
+                sidebar-edge := TouchArea {
+                    x: parent.width - 4px;
+                    width: 4px;
+                    mouse-cursor: ew-resize;
+                    moved => {
+                        if (self.pressed) {
+                            root.sidebar-dragging = true;
+                            root.sidebar-width = max(180px, min(480px, root.width - 320px, root.sidebar-width + self.mouse-x - self.pressed-x));
+                        }
+                    }
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.up && root.sidebar-dragging) {
+                            root.sidebar-dragging = false;
+                            root.sidebar-resized(root.sidebar-width);
+                        }
+                    }
+                    double-clicked => {
+                        root.sidebar-width = 260px;
+                        root.sidebar-resized(root.sidebar-width);
+                    }
                 }
             }
 
@@ -982,6 +1013,8 @@ export component AppWindow inherits Window {
                     unreadable: root.note-unreadable;
                     note-words: root.note-words;
                     view-mode: root.view-mode;
+                    split-ratio <=> root.split-ratio;
+                    split-resized(ratio) => { root.split-resized(ratio); }
                     wide: root.wide;
                     show-status: !root.zen;
                     blocks: root.blocks;

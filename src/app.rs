@@ -3,6 +3,7 @@
 mod backups;
 mod capture;
 mod custom_theme;
+mod exchange;
 use custom_theme::CUSTOM;
 /// Highest theme number (8 Sakura, 9 Cyberpunk, 10 Expedition 33).
 const LAST_THEME: i32 = 10;
@@ -136,6 +137,8 @@ pub struct App {
     /// The history panel's copies of the open note (unix ms, newest first).
     versions: Vec<i64>,
     toast_timer: Timer,
+    /// Exchange rates for `@curr`, and their download.
+    exchange: exchange::Exchange,
     /// The last save failed and the user was told; cleared (with a message) once saving works again.
     save_failed: bool,
     this: rc::Weak<RefCell<App>>,
@@ -232,6 +235,7 @@ impl App {
             versions: Vec::new(),
             toast_timer: Timer::default(),
             save_failed: false,
+            exchange: Default::default(),
             this: rc::Weak::new(),
             ui: ui.as_weak(),
         }));
@@ -259,6 +263,8 @@ impl App {
         ui.set_show_saved(sections.saved);
         ui.set_show_notebooks(sections.notebooks);
         ui.set_sidebar_open(!this.state.sidebar_collapsed);
+        ui.set_sidebar_width(clamp_sidebar_width(this.state.sidebar_width));
+        ui.set_split_ratio(clamp_split_ratio(this.state.split_ratio));
         ui.set_launch_at_login(system::launch_at_login());
         ui.set_software_rendering(this.state.software_rendering);
         ui.set_close_to_tray(this.state.close_to_tray);
@@ -836,6 +842,24 @@ impl App {
         self.save_state();
     }
 
+    /// The notes list's edge was dragged (or double-clicked back to the default).
+    pub fn set_sidebar_width(&mut self, width: f32) {
+        let width = clamp_sidebar_width(width);
+        if width != self.state.sidebar_width {
+            self.state.sidebar_width = width;
+            self.save_state();
+        }
+    }
+
+    /// The Split view's divider was dragged (or double-clicked back to half and half).
+    pub fn set_split_ratio(&mut self, ratio: f32) {
+        let ratio = clamp_split_ratio(ratio);
+        if ratio != self.state.split_ratio {
+            self.state.split_ratio = ratio;
+            self.save_state();
+        }
+    }
+
     pub fn set_sidebar_open(&mut self, open: bool) {
         self.state.sidebar_collapsed = !open;
         self.save_state();
@@ -979,6 +1003,22 @@ impl App {
             new.replace_range(line_start..cursor, &table);
             // Select "Column 1" so typing replaces it.
             self.replace_body(new, Some((line_start + first_cell.start, line_start + first_cell.end)));
+        } else if let Some(result) = commands::parse_time(&line, chrono::Utc::now()) {
+            let Ok(replacement) = result else {
+                self.toast("Couldn\u{2019}t tell those time zones. Try \u{201c}@time 3pm IST to PST\u{201d} or \u{201c}@time India to Estonia\u{201d}.", true);
+                return true;
+            };
+            let mut new = body.clone();
+            new.replace_range(line_start..line_end, &replacement);
+            let at = line_start + replacement.len() + 1;
+            self.replace_body(new, Some((at, at)));
+        } else if let Some(request) = commands::currency_request(&line) {
+            if let Some(replacement) = self.currency_line(note_id, &line, request) {
+                let mut new = body.clone();
+                new.replace_range(line_start..line_end, &replacement);
+                let at = line_start + replacement.len() + 1;
+                self.replace_body(new, Some((at, at)));
+            }
         } else if let Some(result) = commands::parse_calc(&line) {
             let Ok(replacement) = result else {
                 self.toast("Couldn't calculate that. Try \u{201c}@calc 12*3.5 + 8\u{201d}.", true);
@@ -1790,6 +1830,16 @@ fn show_notification(title: &str, body: &str) {
     });
 }
 
+/// The notes list's width, kept between 180 and 480 px (the same limits as dragging in `ui/app.slint`).
+fn clamp_sidebar_width(width: f32) -> f32 {
+    if width.is_finite() { width.clamp(180.0, 480.0) } else { 260.0 }
+}
+
+/// The text's share in Split view, kept between 25% and 75% (as in `ui/editor.slint`).
+fn clamp_split_ratio(ratio: f32) -> f32 {
+    if ratio.is_finite() { ratio.clamp(0.25, 0.75) } else { 0.5 }
+}
+
 /// One step of a size setting (text size, interface size): ±10% per step, 0 resets to 100%.
 /// Rounded to whole tens so repeated steps don't drift (0.1 isn't exact in floating point).
 fn step_scale(current: f32, step: i32, min: f32, max: f32) -> f32 {
@@ -1875,6 +1925,8 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_set_wide, |a, wide| a.set_wide(wide));
     on!(on_set_view_mode, |a, mode| a.set_view_mode(mode));
     on!(on_set_format_bar, |a, shown| a.set_format_bar(shown));
+    on!(on_sidebar_resized, |a, width| a.set_sidebar_width(width));
+    on!(on_split_resized, |a, ratio| a.set_split_ratio(ratio));
     on!(on_set_launch_at_login, |a, enabled| a.set_launch_at_login(enabled));
     on!(on_set_software_rendering, |a, on| a.set_software_rendering(on));
     on!(on_set_close_to_tray, |a, on| a.set_close_to_tray(on));
@@ -2130,6 +2182,18 @@ fn retry_mica(app: rc::Weak<RefCell<App>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn divider_sizes_stay_in_range() {
+        assert_eq!(clamp_sidebar_width(300.0), 300.0);
+        assert_eq!(clamp_sidebar_width(50.0), 180.0);
+        assert_eq!(clamp_sidebar_width(2000.0), 480.0);
+        assert_eq!(clamp_sidebar_width(f32::NAN), 260.0);
+        assert_eq!(clamp_split_ratio(0.6), 0.6);
+        assert_eq!(clamp_split_ratio(0.0), 0.25);
+        assert_eq!(clamp_split_ratio(1.0), 0.75);
+        assert_eq!(clamp_split_ratio(f32::INFINITY), 0.5);
+    }
 
     #[test]
     fn colour_dots_match_preview_colours() {

@@ -651,6 +651,18 @@ more")]);
     }
 
     #[test]
+    fn divider_sizes_are_saved_and_default_for_old_settings() {
+        let (store, root) = scratch_store("dividers");
+        fs::write(root.join("state.json"), r#"{"theme": 2}"#).unwrap();
+        let state = store.load_state();
+        assert_eq!((state.sidebar_width, state.split_ratio), (260.0, 0.5));
+        store.save_state(&UiState { sidebar_width: 320.0, split_ratio: 0.4, ..state }).unwrap();
+        let state = store.load_state();
+        assert_eq!((state.sidebar_width, state.split_ratio, state.theme), (320.0, 0.4, 2));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn missing_settings_file_gives_defaults() {
         let (store, root) = scratch_store("no-state");
         assert_eq!(store.load_state().ui_scale, 1.0);

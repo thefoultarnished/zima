@@ -115,6 +115,21 @@ pub fn open_file(path: &Path) {
     }
 }
 
+/// For Zima's few web requests (word lookup, exchange rates): Windows' own secure connection code
+/// and trusted certificates (a smaller exe than bundling them), and a timeout so nothing hangs.
+pub fn http_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(25)))
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build()
+        .into()
+}
+
 /// Open http(s) and mailto links in the default handler; ignore anything else.
 pub fn open_url(url: &str) {
     let allowed = ["http://", "https://", "mailto:"].iter().any(|p| url.to_ascii_lowercase().starts_with(p));

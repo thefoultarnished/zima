@@ -84,6 +84,9 @@ export component Editor {
     in property <int> view-mode;
     in property <bool> wide;
     in property <bool> show-status: true;
+    // Share of the width the text gets in Split view (dragged by the divider).
+    in-out property <float> split-ratio: 0.5;
+    callback split-resized(float);
     // The note's file couldn't be read: no editing, and a message instead of the text.
     in property <bool> unreadable;
     in property <[MdBlock]> blocks;
@@ -148,7 +151,7 @@ export component Editor {
         preview.content-y = 0;
     }
 
-    property <length> edit-width: root.view-mode == 2 ? 0px : root.view-mode == 1 ? root.width / 2 : root.width;
+    property <length> edit-width: root.view-mode == 2 ? 0px : root.view-mode == 1 ? root.width * root.split-ratio : root.width;
     property <length> font-size: 16px * Theme.text-scale;
 
     // Edit pane
@@ -157,7 +160,9 @@ export component Editor {
         width: root.edit-width;
         visible: root.has-note && root.view-mode != 2;
 
-        property <length> column-width: root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
+        // Split view: the text fills its pane, so it follows the divider. Otherwise a readable
+        // 680 px column, unless Wide is on.
+        property <length> column-width: root.view-mode == 1 ? max(200px, self.visible-width - 64px) : root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
         property <length> column-x: (self.visible-width - self.column-width) / 2;
         property <length> pad-top: 36px;
         property <length> pad-bottom: root.typewriter ? self.visible-height * 0.55 : 120px;
@@ -325,11 +330,36 @@ export component Editor {
         background: @linear-gradient(0deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
     }
 
-    // Split divider
+    // Split divider: drag to resize (25% to 75%, as in Rust), double-click to share the width equally.
+    // Above the preview, which would otherwise catch the pointer on its half.
     if root.has-note && root.view-mode == 1: Rectangle {
-        x: root.edit-width;
-        width: 1px;
-        background: Theme.rule;
+        x: root.edit-width - 4px;
+        width: 9px;
+        z: 1;
+
+        Rectangle {
+            x: 4px;
+            width: 1px;
+            background: split-touch.has-hover || split-touch.pressed ? Theme.accent : Theme.rule;
+        }
+
+        split-touch := TouchArea {
+            mouse-cursor: ew-resize;
+            moved => {
+                if (self.pressed) {
+                    root.split-ratio = max(0.25, min(0.75, (root.edit-width + self.mouse-x - self.pressed-x) / root.width));
+                }
+            }
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.up && ev.button == PointerEventButton.left) {
+                    root.split-resized(root.split-ratio);
+                }
+            }
+            double-clicked => {
+                root.split-ratio = 0.5;
+                root.split-resized(root.split-ratio);
+            }
+        }
     }
 
     // Preview pane
@@ -339,7 +369,9 @@ export component Editor {
         visible: root.has-note && root.view-mode != 0;
         scrolled => { root.link-hover-end(); }
 
-        property <length> column-width: root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
+        // Split view: the text fills its pane, so it follows the divider. Otherwise a readable
+        // 680 px column, unless Wide is on.
+        property <length> column-width: root.view-mode == 1 ? max(200px, self.visible-width - 64px) : root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
 
         VerticalLayout {
             width: preview.visible-width;

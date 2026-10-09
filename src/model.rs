@@ -81,6 +81,10 @@ pub struct UiState {
     pub current: Option<NoteId>,
     pub sections: Sections,
     pub sidebar_collapsed: bool,
+    /// Width of the notes list in logical pixels (dragged by its edge).
+    pub sidebar_width: f32,
+    /// Share of the width the text gets in Split view; the preview gets the rest.
+    pub split_ratio: f32,
     /// 0 = follow system, 1 = Light, 2 = Dark, 3 = Ethereal, 4 = Zima Blue, 5 = Blue White.
     pub theme: i32,
     pub font: String,
@@ -146,6 +150,8 @@ impl Default for UiState {
             current: None,
             sections: Sections::default(),
             sidebar_collapsed: false,
+            sidebar_width: 260.0,
+            split_ratio: 0.5,
             theme: 0,
             font: "Inter".into(),
             transparency: 1.0,

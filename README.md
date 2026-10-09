@@ -34,6 +34,8 @@ This is a rewrite of an older Zima built with Tauri and React. It has also been 
 | `@remind me to call Sam tomorrow at 5` | Sets a reminder. Repeats work too: `every weekday at 9:30`. |
 | `@table 3,4` | Inserts a table with 3 rows and 4 columns. |
 | `@calc 12*3.5 + 8` | Replaces the line with the answer. |
+| `@time 3pm IST to PST` | Converts a time between zones. Countries and cities work too: `@time India to Estonia`, `@time tokyo`. |
+| `@curr 100 usd to inr` | Converts money with today's rates (`@currency` works too, and names like "euros" or "$"). |
 | `@goal 500` | Sets a word goal for the note. |
 | `@timer 25` | Starts a focus timer. |
 

@@ -10,6 +10,8 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "due", hint: "rent tomorrow  (adds a task)" },
     Command { name: "table", hint: "3,4  (rows, columns)" },
     Command { name: "calc", hint: "12*3.5 + 8" },
+    Command { name: "time", hint: "3pm IST to PST  (or India to Estonia)" },
+    Command { name: "curr", hint: "100 usd to inr  (rates by exchangerate-api.com)" },
     Command { name: "timer", hint: "25  (minutes of focus)" },
     Command { name: "goal", hint: "500  (words for this note)" },
     Command { name: "today", hint: "insert today's date" },
@@ -52,6 +54,17 @@ fn command_args<'a>(line: &'a str, name: &str) -> Option<&'a str> {
 pub fn parse_calc(line: &str) -> Option<Result<String, ()>> {
     let expr = command_args(line, "calc")?;
     Some(crate::calc::evaluate(expr).map(|v| format!("{expr} = {}", crate::calc::format_number(v))).ok_or(()))
+}
+
+/// `@time 3pm IST to PST`: the line to replace it with ("3:00 PM IST = 2:30 AM PDT").
+pub fn parse_time(line: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Result<String, ()>> {
+    let request = command_args(line, "time")?;
+    Some(crate::timezones::convert(request, now, crate::timezones::Zone::Here).ok_or(()))
+}
+
+/// `@curr 100 usd to inr` or `@currency …`: what's asked (converted in `crate::currency`).
+pub fn currency_request(line: &str) -> Option<&str> {
+    command_args(line, "curr").or_else(|| command_args(line, "currency"))
 }
 
 /// `@goal 500` sets a word goal; `@goal off` (or 0) clears it.
@@ -201,6 +214,17 @@ mod tests {
         assert_eq!(parse_calc("@calc 12*3.5 + 8"), Some(Ok("12*3.5 + 8 = 50".into())));
         assert_eq!(parse_calc("@calc oops"), Some(Err(())));
         assert_eq!(parse_calc("@calculate"), None);
+        let now = chrono::Utc::now();
+        assert!(parse_time("@time tokyo to london", now).is_some_and(|r| r.is_ok_and(|text| text.contains(" = "))));
+        assert_eq!(parse_time("@time somewhere odd", now), Some(Err(())));
+        // `@timer` is a different command.
+        assert_eq!(parse_time("@timer 25", now), None);
+        assert_eq!(parse_time("time tokyo", now), None);
+        assert_eq!(currency_request("@curr 100 usd to inr"), Some("100 usd to inr"));
+        assert_eq!(currency_request("  @currency 5 euro in yen"), Some("5 euro in yen"));
+        assert_eq!(currency_request("@curr"), Some(""));
+        assert_eq!(currency_request("@currently busy"), None);
+        assert_eq!(currency_request("curr 100 usd to inr"), None);
         assert_eq!(parse_goal("@goal 500"), Some(Ok(Some(500))));
         assert_eq!(parse_goal("@goal off"), Some(Ok(None)));
         assert_eq!(parse_timer("@timer"), Some(Ok(Some(25))));
