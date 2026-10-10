@@ -23,7 +23,7 @@ This is a rewrite of an older Zima built with Tauri and React. It has also been 
 
 ## What it does
 
-**Writing.** Edit, split or preview mode (`Ctrl+E` cycles between them), a Markdown preview with code highlighting, tables, checklists and a formatting bar if you like buttons (with text colours: `==red:text==`). Zen mode hides everything but the text, with typewriter scrolling and a spotlight that fades the lines you're not working on.
+**Writing.** Edit, split, preview or live mode (`Ctrl+E` cycles between them; live mode draws the note like the preview, but the block you are in opens as plain Markdown you can type into), a Markdown preview with code highlighting, tables, checklists and a formatting bar if you like buttons (with text colours: `==red:text==`). Zen mode hides everything but the text, with typewriter scrolling and a spotlight that fades the lines you're not working on.
 
 **Finding things.** `Ctrl+K` opens a quick switcher that searches notes and runs any command. The sidebar keeps your open notes, pinned notes, favourites, recent notes, notebooks, tags and saved searches in one column, and the Bin sits at the bottom. There's also a daily note (`Ctrl+D`), a random note, "on this day", and a Tasks view (`Ctrl+T`) that collects every checkbox from every note. To add a task with a deadline, type a line like `@due rent tomorrow` and press Enter: it goes straight into Tasks.
 
@@ -43,7 +43,7 @@ If you write something like "dentist friday 10am" without the `@remind`, Zima no
 
 **Getting out of the way.** Close the window and Zima keeps running in the tray, so reminders still go off. If you'd rather the close button quit the app, turn off **Keep running in the tray** in Settings. Opening Zima again while it's already running just brings back the window you have. `Ctrl+Alt+N` opens a small capture box from any app. Any note can pop out as a sticky note that stays on your desktop, and any note with `---` between sections can be presented as slides.
 
-**Making it yours.** Several built-in themes (Light, Dark, Ethereal, Zima Blue, Sakura, Cyberpunk and more), an Auto theme that follows the time of day, your own accent colour, and a fully custom theme in `theme.json`. Text size and the size of the whole interface can be changed separately. Keyboard shortcuts can be rebound in Settings (`Ctrl+,`).
+**Making it yours.** Several built-in themes (Light, Dark, Ethereal, Zima Blue, Sakura, Cyberpunk and more), a System theme that follows Windows light or dark mode, your own accent colour, and a fully custom theme in `theme.json`. Text size and the size of the whole interface can be changed separately. Keyboard shortcuts can be rebound in Settings (`Ctrl+,`).
 
 **Also in there.** Spell check, word lookup, writing stats, a calendar, notebooks, note colours, archiving, merging notes, and import and export of Markdown folders and zip files.
 

@@ -1,0 +1,297 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { BacklinkList, BlockView, LinkRow, MdBlock } from "markdown.slint";
+
+// Live mode: every block is drawn like the preview, except the block(s) under the cursor,
+// which show as raw Markdown in one editable input. Rust splits the note into the parts.
+export component LiveEditor {
+    // Rendered blocks before and after the raw part.
+    in property <[MdBlock]> before;
+    in property <[MdBlock]> after;
+    // The raw Markdown being edited (two-way, so typing isn't overwritten).
+    in-out property <string> live-text;
+    // Counts each change Rust makes to live-text, so late edits can be ignored.
+    in property <int> live-rev;
+    // Byte length of live-text, for the "at start / at end" checks.
+    in property <int> live-len;
+    // Where the raw part starts in the note (used by Rust).
+    in property <int> live-start;
+    in property <bool> unreadable;
+    in property <bool> typewriter;
+    in property <bool> wide;
+    in-out property <string> note-title;
+    // Notes linking to this one, shown at the bottom.
+    in property <[LinkRow]> backlinks;
+
+    // Selection and caret of the raw input, as local byte offsets.
+    out property <int> sel-anchor: input.anchor-position-byte-offset;
+    out property <int> sel-cursor: input.cursor-position-byte-offset;
+    out property <bool> input-focused: input.has-focus;
+    // Caret position inside this component (for the @ suggestions).
+    out property <Point> live-caret;
+    // Where the title ends, and how far the text is scrolled (for the spotlight's top fade).
+    out property <length> title-bottom: title-box.y + title-box.height;
+    out property <length> content-y: scroll.content-y;
+
+    callback title-edited(string);
+    callback live-edited(string, int, int);
+    callback live-cursor-moved(int);
+    // Return true to take the key; false lets the input handle it.
+    callback live-key(string) -> bool;
+    callback live-activate(int);
+    callback live-end();
+    callback live-follow(int);
+    callback open-note(string);
+    callback toggle-task(int);
+    callback link-clicked(string);
+    callback link-hover([string], length, length);
+    callback link-hover-end();
+
+    public function set-live-selection(anchor: int, cursor: int, focus: bool) {
+        if (focus) {
+            input.focus();
+        }
+        input.set-selection-offsets(anchor, cursor);
+    }
+
+    public function focus-live() {
+        input.focus();
+    }
+
+    public function focus-title() {
+        title.focus();
+    }
+
+    // A new note starts at the top.
+    public function scroll-to-top() {
+        scroll.content-y = 0;
+    }
+
+    // Remember where the caret is on screen, so the next move puts it back at the same height.
+    public function live-anchor() {
+        root.anchor-y = root.live-caret.y;
+        root.restore-anchor = true;
+    }
+
+    property <length> font-size: 16px * Theme.text-scale;
+    property <length> caret-content-y;
+    property <length> anchor-y;
+    property <bool> restore-anchor;
+    property <bool> caret-on-first;
+    property <bool> caret-on-last;
+
+    scroll := ScrollView {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+
+        // A readable 680 px column, or the wide setting; centred.
+        property <length> column-width: root.wide ? max(200px, self.visible-width - 160px) : min(680px, self.visible-width - 64px);
+        property <length> column-x: (self.visible-width - self.column-width) / 2;
+
+        content-width: self.visible-width;
+        content-height: max(self.visible-height, column.preferred-height);
+
+        column := VerticalLayout {
+            x: scroll.column-x;
+            y: 0;
+            width: scroll.column-width;
+            padding-top: 36px;
+            spacing: 0px;
+            alignment: start;
+
+            // The title wraps onto more lines; Enter moves on to the note text instead.
+            title-box := FocusScope {
+                height: title.height;
+                capture-key-pressed(event) => {
+                    if (title.has-focus && event.text == Key.Return) {
+                        root.focus-live();
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                title := TextInput {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: max(40px * Theme.text-scale, self.preferred-height);
+                    text <=> root.note-title;
+                    single-line: false;
+                    wrap: word-wrap;
+                    font-family: Theme.heading-font;
+                    font-size: 28px * Theme.text-scale;
+                    font-weight: 700;
+                    color: Theme.heading;
+                    selection-background-color: Theme.selection;
+                    selection-foreground-color: Theme.ink;
+                    edited => {
+                        root.title-edited(self.text);
+                    }
+                }
+
+                Text {
+                    x: 0;
+                    y: 0;
+                    visible: root.note-title.is-empty;
+                    text: "Untitled";
+                    color: Theme.muted.with-alpha(0.6);
+                    font-family: Theme.heading-font;
+                    font-size: 28px * Theme.text-scale;
+                    font-weight: 700;
+                }
+            }
+
+            Rectangle {
+                height: 14px;
+            }
+
+            for block in root.before: BlockView {
+                block: block;
+                live: true;
+                activate => { root.live-activate(block.line); }
+                follow-link => { root.live-follow(block.line); }
+                toggle-task(line) => { root.toggle-task(line); }
+                link-clicked(url) => { root.link-clicked(url); }
+                link-previews: true;
+                link-hover(titles, x, y) => { root.link-hover(titles, x, y); }
+                link-hover-end => { root.link-hover-end(); }
+            }
+
+            // The raw Markdown: a permanent element, so the focus stays here while blocks change.
+            // The text lines up with the styled blocks (the marker bar sits in the margin), with the
+            // same space above it as a paragraph, so nothing jumps sideways when a block turns raw.
+            raw := FocusScope {
+                height: input.y + input.height;
+                capture-key-pressed(event) => {
+                    if (!input.has-focus) {
+                        return reject;
+                    }
+                    if (event.text == Key.PageUp) {
+                        scroll.content-y = min(0px, scroll.content-y + scroll.visible-height);
+                        return accept;
+                    }
+                    if (event.text == Key.PageDown) {
+                        scroll.content-y = max(min(0px, scroll.visible-height - scroll.content-height), scroll.content-y - scroll.visible-height);
+                        return accept;
+                    }
+                    if (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift) {
+                        if (event.text == Key.Home) {
+                            return root.live-key("doc-start") ? accept : reject;
+                        }
+                        if (event.text == Key.End) {
+                            return root.live-key("doc-end") ? accept : reject;
+                        }
+                        if (event.text == "a" || event.text == "A") {
+                            return root.live-key("select-all") ? accept : reject;
+                        }
+                        return reject;
+                    }
+                    if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                        return reject;
+                    }
+                    if (event.modifiers.shift) {
+                        if (event.text == Key.UpArrow && root.caret-on-first) {
+                            return root.live-key("select-up") ? accept : reject;
+                        }
+                        if (event.text == Key.DownArrow && root.caret-on-last) {
+                            return root.live-key("select-down") ? accept : reject;
+                        }
+                        return reject;
+                    }
+                    if (event.text == Key.Backspace && input.cursor-position-byte-offset == 0 && input.anchor-position-byte-offset == 0) {
+                        return root.live-key("backspace") ? accept : reject;
+                    }
+                    if (event.text == Key.Delete && input.cursor-position-byte-offset == root.live-len && input.anchor-position-byte-offset == root.live-len) {
+                        return root.live-key("delete") ? accept : reject;
+                    }
+                    if (event.text == Key.LeftArrow && input.cursor-position-byte-offset == 0 && input.anchor-position-byte-offset == 0) {
+                        return root.live-key("left") ? accept : reject;
+                    }
+                    if (event.text == Key.RightArrow && input.cursor-position-byte-offset == root.live-len && input.anchor-position-byte-offset == root.live-len) {
+                        return root.live-key("right") ? accept : reject;
+                    }
+                    if (event.text == Key.UpArrow && root.caret-on-first) {
+                        return root.live-key("up") ? accept : reject;
+                    }
+                    if (event.text == Key.DownArrow && root.caret-on-last) {
+                        return root.live-key("down") ? accept : reject;
+                    }
+                    return reject;
+                }
+
+                // A thin bar on the left marks the raw part.
+                Rectangle {
+                    x: -12px;
+                    y: input.y;
+                    width: 2px;
+                    height: input.height;
+                    background: Theme.accent.with-alpha(0.5);
+                }
+
+                input := TextInput {
+                    x: 0;
+                    y: 10px;
+                    width: parent.width;
+                    height: max(self.preferred-height, root.font-size * Theme.line-spacing);
+                    text <=> root.live-text;
+                    read-only: root.unreadable;
+                    line-height-factor: Theme.line-spacing;
+                    single-line: false;
+                    wrap: word-wrap;
+                    font-family: Theme.font-face;
+                    font-size: root.font-size;
+                    color: Theme.ink;
+                    selection-background-color: Theme.selection;
+                    selection-foreground-color: Theme.ink;
+                    edited => {
+                        root.live-edited(self.text, self.cursor-position-byte-offset, root.live-rev);
+                    }
+
+                    // Keep the caret in view, and tell Rust where it is.
+                    cursor-position-changed(cpos) => {
+                        root.live-cursor-moved(self.cursor-position-byte-offset);
+                        root.caret-content-y = column.y + raw.y + self.y + cpos.y;
+                        root.caret-on-first = cpos.y < root.font-size * 0.5;
+                        root.caret-on-last = cpos.y + root.font-size * Theme.line-spacing * 1.5 >= self.preferred-height;
+                        if (root.restore-anchor) {
+                            root.restore-anchor = false;
+                            scroll.content-y = min(0px, max(scroll.visible-height - scroll.content-height, root.anchor-y - root.caret-content-y));
+                        } else if (root.typewriter) {
+                            scroll.content-y = min(0px, scroll.visible-height * 0.45 - root.caret-content-y);
+                        } else if (root.caret-content-y + scroll.content-y < 16px) {
+                            scroll.content-y = min(0px, 16px - root.caret-content-y);
+                        } else if (root.caret-content-y + scroll.content-y + 48px > scroll.visible-height) {
+                            scroll.content-y = min(0px, scroll.visible-height - root.caret-content-y - 48px);
+                        }
+                        root.live-caret = { x: column.x + raw.x + self.x + cpos.x + scroll.content-x, y: root.caret-content-y + scroll.content-y };
+                    }
+                }
+            }
+
+            for block in root.after: BlockView {
+                block: block;
+                live: true;
+                activate => { root.live-activate(block.line); }
+                follow-link => { root.live-follow(block.line); }
+                toggle-task(line) => { root.toggle-task(line); }
+                link-clicked(url) => { root.link-clicked(url); }
+                link-previews: true;
+                link-hover(titles, x, y) => { root.link-hover(titles, x, y); }
+                link-hover-end => { root.link-hover-end(); }
+            }
+
+            if root.backlinks.length > 0: BacklinkList {
+                links: root.backlinks;
+                open-note(id) => { root.open-note(id); }
+            }
+
+            // Clicking the empty space below the note puts the cursor at its end.
+            TouchArea {
+                height: root.typewriter ? max(120px, scroll.visible-height * 0.55) : 120px;
+                clicked => { root.live-end(); }
+            }
+        }
+    }
+}

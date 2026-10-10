@@ -476,6 +476,16 @@ pub fn note_links(inline: &str) -> Vec<String> {
     found
 }
 
+/// The first link in a block's Markdown, as the URL to open: `note:Title` for `[[Title]]` (spaces as
+/// %20), or the web address. Links inside code are not links, so they are skipped.
+pub fn first_link(source: &str) -> Option<String> {
+    let linked = wiki_links(source);
+    Parser::new(&linked).find_map(|event| match event {
+        Event::Start(Tag::Link { dest_url, .. }) if !dest_url.is_empty() => Some(dest_url.to_string()),
+        _ => None,
+    })
+}
+
 /// A line without its Markdown symbols: "# ", "> ", "- [ ] " and the emphasis marks `* _ ~ \``.
 pub fn strip_markers(line: &str) -> String {
     let line = line.trim_start_matches(['#', '>', '-', '+', ' ']);
@@ -737,6 +747,42 @@ mod tests {
         // A heading at the very top has no space above it, and two headings in a row keep theirs.
         let space: Vec<u8> = parse("# A\n## B").iter().map(|b| b.space).collect();
         assert_eq!(space, vec![0, 24]);
+    }
+
+    #[test]
+    fn first_link_wiki_link_opens_the_note() {
+        assert_eq!(first_link("Some [[Project Plan]] text"), Some("note:Project%20Plan".into()));
+    }
+
+    #[test]
+    fn first_link_markdown_link_gives_its_address() {
+        assert_eq!(first_link("see [docs](https://x.org/a)"), Some("https://x.org/a".into()));
+    }
+
+    #[test]
+    fn first_link_autolink() {
+        assert_eq!(first_link("<https://x.org>"), Some("https://x.org".into()));
+    }
+
+    #[test]
+    fn first_link_takes_the_first_of_several() {
+        assert_eq!(first_link("[[A]] and [b](https://b.org)"), Some("note:A".into()));
+    }
+
+    #[test]
+    fn first_link_none_in_plain_text() {
+        assert_eq!(first_link("plain text, no links"), None);
+        assert_eq!(first_link(""), None);
+    }
+
+    #[test]
+    fn first_link_ignores_links_in_code() {
+        assert_eq!(first_link("`[[Note]]` and `[x](https://x.org)`"), None);
+    }
+
+    #[test]
+    fn first_link_ignores_empty_targets() {
+        assert_eq!(first_link("[empty]() and [[]]"), None);
     }
 
     #[test]

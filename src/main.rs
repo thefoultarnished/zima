@@ -13,6 +13,7 @@ mod highlight;
 mod history;
 mod import;
 mod instance;
+mod live;
 mod markdown;
 mod model;
 mod palette;

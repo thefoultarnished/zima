@@ -6,10 +6,11 @@ mod custom_theme;
 mod exchange;
 use custom_theme::CUSTOM;
 /// Highest theme number (8 Sakura, 9 Cyberpunk, 10 Expedition 33).
-const LAST_THEME: i32 = 10;
+const LAST_THEME: i32 = 20;
 mod finding;
 pub use organize::extract_tags;
 mod later;
+mod live_view;
 mod present;
 mod shortcuts;
 mod navigate;
@@ -36,7 +37,7 @@ use crate::markdown::{self, Kind};
 use crate::model::{Note, NoteId, Reminder, UiState, now_ms};
 use crate::store::Store;
 use crate::{AppWindow, ColourDot, MdBlock, NoteRow, ReminderRow, Suggestion, Theme};
-use crate::{commands, format, import, reminders, system, window};
+use crate::{commands, format, import, live, reminders, system, window};
 use navigate::{PaletteEntry, PaletteMode};
 
 /// How long to wait after the last keystroke before writing to disk.
@@ -93,6 +94,8 @@ pub struct App {
     /// An `@` whose suggestions were dismissed with Esc.
     dismissed_at: Option<usize>,
     cursor: usize,
+    /// Live mode's state, while the open note is shown in Live (view mode 3).
+    live: Option<live_view::LiveState>,
     /// The note the editor shows, whose cursor `cursor` is.
     shown: Option<NoteId>,
     /// Notes picked with Ctrl+click in the sidebar, for doing something to all of them at once.
@@ -107,6 +110,8 @@ pub struct App {
     /// Undo/redo for edits made from Rust (formatting, commands), which the text field can't undo itself.
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+    /// Undo/redo for Live mode, which needs its own list because Rust rebuilds the blocks around the text.
+    live_history: live::History,
     palette_mode: PaletteMode,
     palette_entries: Vec<PaletteEntry>,
     /// Titles on the link hover card now showing (empty: none).
@@ -236,6 +241,8 @@ impl App {
             toast_timer: Timer::default(),
             save_failed: false,
             exchange: Default::default(),
+            live: None,
+            live_history: live::History::default(),
             this: rc::Weak::new(),
             ui: ui.as_weak(),
         }));
@@ -250,6 +257,7 @@ impl App {
             this.state.current = this.state.open_ids.last().copied();
         }
         this.state.transparency = this.state.transparency.clamp(0.3, 1.0);
+        this.state.theme = known_theme(this.state.theme);
 
         let sections = &this.state.sections;
         ui.set_show_active(sections.active);
@@ -503,27 +511,27 @@ impl App {
         // Typing so far counts for the stats; this edit, made by Zima, doesn't.
         self.count_words();
         let cursor_before = self.cursor;
+        // In Live mode the change goes to the Live history instead of the Ctrl+Z list.
+        let live_step = record && self.live.is_some();
         let Some(note) = self.current_mut() else { return };
         let before = std::mem::replace(&mut note.body, body);
         note.modified = now_ms();
         let id = note.id;
-        if record {
+        if record && !live_step {
             let after = note.body.clone();
-            self.undo.push(Snapshot { note: id, before, after, cursor: cursor_before });
+            self.undo.push(Snapshot { note: id, before: before.clone(), after, cursor: cursor_before });
             if self.undo.len() > 100 {
                 self.undo.remove(0);
             }
             self.redo.clear();
         }
+        let edit = live_step.then(|| live::diff(&before, self.current().map_or("", |n| n.body.as_str())));
         self.dirty.insert(id);
         self.index_dirty = true;
         self.schedule_save();
-        if let (Some(ui), Some(note)) = (self.ui.upgrade(), self.find(id)) {
-            ui.set_note_body(note.body.as_str().into());
-            if let Some((anchor, cursor)) = selection {
-                ui.invoke_set_body_selection(anchor as i32, cursor as i32);
-                self.cursor = cursor;
-            }
+        self.show_body_and_selection(&before, selection);
+        if let Some(edit) = edit {
+            self.live_history.record(live::Step { edit, cursor_before, cursor_after: self.cursor, typed: false, at_ms: now_ms() });
         }
         self.after_body_change();
         self.sync_sticky(id);
@@ -532,6 +540,10 @@ impl App {
     /// Ctrl+Z: undo the last Rust-made edit if the text is still exactly as it left it.
     /// Returns false to let the text field handle ordinary typing undo.
     pub fn undo(&mut self) -> bool {
+        if self.state.view_mode == 3 {
+            self.live_undo();
+            return true;
+        }
         let (Some(note), Some(top)) = (self.current(), self.undo.last()) else { return false };
         if top.note != note.id || top.after != note.body {
             return false;
@@ -545,6 +557,10 @@ impl App {
 
     /// Ctrl+Y: redo what Ctrl+Z undid.
     pub fn redo(&mut self) -> bool {
+        if self.state.view_mode == 3 {
+            self.live_redo();
+            return true;
+        }
         let (Some(note), Some(top)) = (self.current(), self.redo.last()) else { return false };
         if top.note != note.id || top.before != note.body {
             return false;
@@ -666,9 +682,7 @@ impl App {
         match format::auto_pair(&body, anchor, cursor, typed) {
             Some(edit) if edit.text == body => {
                 // Just stepping over a closer.
-                if let Some(ui) = self.ui.upgrade() {
-                    ui.invoke_set_body_selection(edit.anchor as i32, edit.cursor as i32);
-                }
+                self.show_selection(edit.anchor, edit.cursor, true);
                 self.cursor = edit.cursor;
                 true
             }
@@ -773,9 +787,10 @@ impl App {
         }
     }
 
-    fn select_match(&self) {
-        if let (Some(ui), Some(&(start, end))) = (self.ui.upgrade(), self.find_matches.get(self.find_index)) {
-            ui.invoke_select_in_body(start as i32, end as i32);
+    fn select_match(&mut self) {
+        if let Some(&(start, end)) = self.find_matches.get(self.find_index) {
+            // Without focus: typing stays in the find box.
+            self.show_selection(start, end, false);
         }
     }
 
@@ -1093,20 +1108,15 @@ impl App {
     fn apply_appearance(&mut self) {
         let Some(ui) = self.ui.upgrade() else { return };
         let theme = ui.global::<Theme>();
-        // 6 = Auto: Light from 7am to 7pm, Dark otherwise.
         self.apply_custom_theme();
-        let choice = match self.state.theme.clamp(0, LAST_THEME) {
-            6 => {
-                let hour = chrono::Timelike::hour(&Local::now());
-                if (7..19).contains(&hour) { 1 } else { 2 }
-            }
+        let choice = match known_theme(self.state.theme) {
             CUSTOM => {
                 if self.custom_theme.dark { 2 } else { 1 }
             }
             other => other,
         };
         theme.set_choice(choice);
-        theme.set_selected_theme(self.state.theme.clamp(0, LAST_THEME));
+        theme.set_selected_theme(known_theme(self.state.theme));
         match self.state.accent.as_deref().and_then(parse_hex_color) {
             Some(color) => {
                 theme.set_custom_accent(color);
@@ -1120,22 +1130,19 @@ impl App {
         theme.set_ui_scale(self.state.ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX));
         theme.set_line_spacing(self.state.line_spacing.clamp(1.0, 2.0));
         ui.set_spotlight(self.state.spotlight);
-        ui.set_view_mode(self.state.view_mode.clamp(0, 2));
+        ui.set_view_mode(self.state.view_mode.clamp(0, 3));
         ui.set_wide(self.state.wide);
         ui.set_format_bar(self.state.format_bar);
         ui.set_typewriter(self.state.typewriter);
         window::apply_mica(&ui, theme.get_dark());
         self.apply_note_overrides();
         self.sync_theme_to_stickies();
+        // Live mode's rows take their colours from the theme too.
+        if self.live.is_some() {
+            self.live_snap_at(self.cursor, self.cursor, false);
+        }
         // Code colours depend on light/dark.
         self.refresh_preview();
-    }
-
-    /// Re-apply the Auto theme as the day goes on.
-    pub fn tick_auto_theme(&mut self) {
-        if self.state.theme == 6 {
-            self.apply_appearance();
-        }
     }
 
     /// `None` resets to the theme's own accent.
@@ -1146,7 +1153,7 @@ impl App {
     }
 
     pub fn set_theme(&mut self, theme: i32) {
-        self.state.theme = theme.clamp(0, LAST_THEME);
+        self.state.theme = known_theme(theme);
         self.save_state();
         self.apply_appearance();
     }
@@ -1173,10 +1180,20 @@ impl App {
     }
 
     pub fn set_view_mode(&mut self, mode: i32) {
-        self.state.view_mode = mode.clamp(0, 2);
+        let was_live = self.live.take().is_some();
+        self.live_history.clear();
+        self.state.view_mode = mode.clamp(0, 3);
         self.save_state();
         self.refresh_preview();
         self.refresh_backlinks();
+        if self.state.view_mode == 3 {
+            self.live_snap_at(self.cursor, self.cursor, true);
+        } else if was_live && self.state.view_mode != 2 {
+            // Back to plain text: the text field's selection goes where the cursor is.
+            if let Some(ui) = self.ui.upgrade() {
+                ui.invoke_set_body_selection(self.cursor as i32, self.cursor as i32);
+            }
+        }
     }
 
     pub fn set_typewriter(&mut self, on: bool) {
@@ -1533,6 +1550,7 @@ impl App {
         self.count_words();
         self.note_cursor();
         self.read_again_if_unreadable();
+        self.live = None;
         match self.current() {
             Some(note) => {
                 ui.set_has_note(true);
@@ -1554,9 +1572,13 @@ impl App {
         self.dismissed_at = None;
         self.undo.clear();
         self.redo.clear();
+        self.live_history.clear();
         self.after_body_change();
         self.refresh_backlinks();
         self.apply_note_overrides();
+        if self.state.view_mode == 3 {
+            self.live_snap_at(self.cursor, self.cursor, true);
+        }
         ui.invoke_focus_default();
         // Back to where the cursor was. After this turn, once the editor has scrolled the new note to the top.
         if self.cursor > 0 && self.state.view_mode != 2 {
@@ -1596,7 +1618,7 @@ impl App {
     fn refresh_preview(&self) {
         let Some(ui) = self.ui.upgrade() else { return };
         let blocks: Vec<MdBlock> = match self.current() {
-            Some(note) if self.state.view_mode != 0 => {
+            Some(note) if matches!(self.state.view_mode, 1 | 2) => {
                 let ink = Ink::of(&ui);
                 markdown::parse(&note.body).into_iter().map(|b| md_block(b, &ink)).collect()
             }
@@ -1611,7 +1633,9 @@ impl App {
         self.pause_timer.start(TimerMode::SingleShot, PAUSE_DELAY, move || {
             if let Some(app) = this.upgrade() {
                 with_app(&app, |a| {
-                    if a.state.view_mode != 0 {
+                    if a.state.view_mode == 3 {
+                        a.live_refresh();
+                    } else if a.state.view_mode != 0 {
                         a.refresh_preview();
                     }
                     a.count_words();
@@ -1876,6 +1900,15 @@ fn one_line(text: &str) -> Option<String> {
     text.contains(['\n', '\r']).then(|| text.replace("\r\n", " ").replace(['\r', '\n'], " "))
 }
 
+/// A saved theme number that still exists. 6 was the Auto theme (light by day, dark at night),
+/// now removed: it becomes 0, System, which follows Windows' light or dark setting.
+fn known_theme(theme: i32) -> i32 {
+    match theme.clamp(0, LAST_THEME) {
+        6 => 0,
+        other => other,
+    }
+}
+
 /// The notes list's width, kept between 180 and 480 px (the same limits as dragging in `ui/app.slint`).
 fn clamp_sidebar_width(width: f32) -> f32 {
     if width.is_finite() { width.clamp(180.0, 480.0) } else { 260.0 }
@@ -1957,6 +1990,11 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_title_edited, |a, title| a.set_title(title.into()));
     on!(on_body_edited, |a, body, cursor| a.set_body(body.into(), cursor.max(0) as usize));
     on!(on_cursor_moved, |a, cursor| a.cursor_moved(cursor.max(0) as usize));
+    on!(on_live_edited, |a, text, cursor, rev| a.live_edited(text.into(), cursor.max(0) as usize, rev));
+    on!(on_live_cursor_moved, |a, cursor| a.live_cursor_moved(cursor.max(0) as usize));
+    on!(on_live_activate, |a, line| a.live_activate(line.max(0) as usize));
+    on!(on_live_follow, |a, line| a.live_follow(line.max(0) as usize));
+    on!(on_live_end, |a| a.live_end());
     on!(on_accept_suggestion, |a, index| a.accept_suggestion(index.max(0) as usize));
     on!(on_dismiss_suggestions, |a| a.dismiss_suggestions());
     on!(on_format, |a, kind| a.format(&kind));
@@ -2051,6 +2089,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_step_ui_scale, |a, step| a.step_ui_scale(step));
     on!(on_set_spotlight, |a, on| a.set_spotlight(on));
     on_now!(on_redo, |a| a.redo());
+    on_now!(on_live_key, |a, key| a.live_key(&key));
     on_now!(on_handle_shortcut, |a, combo| a.shortcut(&combo));
     on!(on_slide_step, |a, delta| a.step_slide(delta));
     on!(on_stop_presenting, |a| a.stop_presenting());
@@ -2073,11 +2112,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_import_zima, |a| a.import_zima());
     on!(on_open_notes_folder, |a| a.open_notes_folder());
     on!(on_open_backups_folder, |a| a.open_backups_folder());
-    // `[[note]]` links open (or create) notes; everything else goes to the browser.
-    on!(on_link_clicked, |a, url| match url.strip_prefix("note:") {
-        Some(title) => a.open_link(&title.replace("%20", " ")),
-        None => system::open_url(&url),
-    });
+    on!(on_link_clicked, |a, url| a.follow_link(&url));
     on!(on_open_palette, |a, mode| a.open_palette(match mode {
         1 => PaletteMode::Outline,
         2 => PaletteMode::Template,
@@ -2178,7 +2213,6 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
                 let Ok(mut app) = app.try_borrow_mut() else { return };
                 app.refresh_lists();
                 app.refresh_reminders();
-                app.tick_auto_theme();
                 app.auto_backup();
                 // Also catches the window's spot if Zima is ended without quitting (Windows shutting down).
                 app.remember_window();
@@ -2228,6 +2262,17 @@ fn retry_mica(app: rc::Weak<RefCell<App>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_auto_theme_becomes_system() {
+        assert_eq!(known_theme(6), 0);
+        // Every other theme keeps its number, Custom (7) included.
+        for theme in [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 15, 20] {
+            assert_eq!(known_theme(theme), theme);
+        }
+        assert_eq!(known_theme(-3), 0);
+        assert_eq!(known_theme(99), LAST_THEME);
+    }
 
     #[test]
     fn done_tasks_are_crossed_out() {

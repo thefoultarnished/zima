@@ -117,7 +117,7 @@ impl App {
         }
         let Some(note) = self.find_mut(id) else { return };
         let before_words = note.body.split_whitespace().count();
-        note.body = body;
+        let old = std::mem::replace(&mut note.body, body);
         note.modified = now_ms();
         let after_words = note.body.split_whitespace().count();
         self.record_words(before_words, after_words);
@@ -127,9 +127,7 @@ impl App {
         // From the Tasks view, not the sticky itself: show the change there too.
         self.sync_sticky(id);
         if self.state.current == Some(id) {
-            if let (Some(ui), Some(note)) = (self.ui.upgrade(), self.find(id)) {
-                ui.set_note_body(note.body.as_str().into());
-            }
+            self.show_body_and_selection(&old, None);
             self.after_body_change();
         }
     }

@@ -143,6 +143,7 @@ impl App {
     fn reload_external(&mut self) -> bool {
         let Some(disk) = self.store.read_notes() else { return false };
         let mut changed_current = false;
+        let mut old_body = String::new();
         let mut replaced = Vec::new();
         let mut conflicts = 0;
         for incoming in disk {
@@ -166,6 +167,7 @@ impl App {
                     } else {
                         if Some(incoming.id) == self.state.current {
                             changed_current = true;
+                            old_body = ours.body.clone();
                         }
                         replaced.push(incoming.id);
                         self.notes[i] = incoming;
@@ -184,8 +186,8 @@ impl App {
         if changed_current {
             if let (Some(ui), Some(note)) = (self.ui.upgrade(), self.current()) {
                 ui.set_note_title(note.title.as_str().into());
-                ui.set_note_body(note.body.as_str().into());
             }
+            self.show_body_and_selection(&old_body, None);
             self.after_body_change();
         }
         if conflicts > 0 {

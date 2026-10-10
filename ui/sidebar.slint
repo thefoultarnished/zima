@@ -567,7 +567,10 @@ export component Sidebar inherits Rectangle {
                         }
                     }
 
+                    // Takes the room that's left and can shrink, so a narrow notes list never cuts the box off.
                     search := TextInput {
+                        horizontal-stretch: 1;
+                        min-width: 0px;
                         text <=> root.search-text;
                         single-line: true;
                         vertical-alignment: center;
@@ -583,10 +586,12 @@ export component Sidebar inherits Rectangle {
                             width: 100%;
                             height: 100%;
                             visible: search.text.is-empty;
-                            text: "Search   (Ctrl+K for everything)";
+                            // The shortcut hint only when there's room for it.
+                            text: root.width < 240px ? "Search" : "Search   (Ctrl+K for everything)";
                             color: Theme.muted;
                             font-size: 12.5px;
                             vertical-alignment: center;
+                            overflow: elide;
                         }
                     }
 

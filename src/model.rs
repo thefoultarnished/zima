@@ -91,7 +91,7 @@ pub struct UiState {
     /// Opacity of the window surfaces, 0.3–1.0. Below 1 the Mica backdrop shows through.
     pub transparency: f32,
     pub wide: bool,
-    /// 0 = edit, 1 = split, 2 = preview.
+    /// 0 = edit, 1 = split, 2 = preview, 3 = live.
     pub view_mode: i32,
     pub format_bar: bool,
     /// Keep the cursor line centred in zen mode.

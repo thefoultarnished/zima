@@ -13,7 +13,7 @@ export struct ThemeInfo {
 export global Theme {
     // 0 = follow system, 1 = Light, 2 = Dark, 3 = Ethereal, 4 = Zima Blue, 5 = Blue White (7 = Custom sets `custom`).
     in-out property <int> choice: 0;
-    // What the user picked, for highlighting in Settings (6 = Auto, which sets `choice` by time of day; 7 = Custom).
+    // What the user picked, for highlighting in Settings (7 = Custom).
     in-out property <int> selected-theme: 0;
     // A custom accent colour overrides the theme's.
     in-out property <bool> has-custom-accent;
@@ -56,18 +56,20 @@ export global Theme {
 
     out property <int> index: root.choice == 0 ? (Palette.color-scheme == ColorScheme.dark ? 2 : 1) : root.choice;
     property <int> i: root.index - 1;
-    out property <bool> dark: root.custom ? root.custom-dark : root.index != 1 && root.index != 8;
+    // The light themes: Light, Sakura, Zelda, Stardew Valley, Ghost of Tsushima.
+    out property <bool> dark: root.custom ? root.custom-dark : root.index != 1 && root.index != 8 && root.index != 14 && root.index != 15 && root.index != 20;
 
-    // One entry per theme, in `index` order: Light … Blue White, (Auto and Custom: unused), Sakura, Cyberpunk, Expedition 33.
-    property <[color]> papers: [#faf8f5, #1c1b1a, #0d0c1d, #1a1a1f, #12b5e5, #1c1b1a, #1c1b1a, #fdf6f7, #0d0b14, #13151d];
-    property <[color]> sidebars: [#f2efe9, #171615, #12112a, #1d2e35, #0ea5e9, #171615, #171615, #f8e9ee, #110e1c, #0f1118];
-    property <[color]> inks: [#2b2926, #e8e4dd, #f0f4ff, #ffffff, #ffffff, #e8e4dd, #e8e4dd, #4a2d36, #f2f0ff, #ece3cf];
-    property <[color]> ink-softs: [#5e5952, #b5afa6, #c7cffb, #c9e4ec, #f0f9ff, #b5afa6, #b5afa6, #7a5561, #c3b8f0, #c2b598];
-    property <[color]> muteds: [#8c857a, #7d786f, #8189c4, #6f9fae, #c7ecfa, #7d786f, #7d786f, #9e7482, #7a6fa8, #857a66];
-    property <[color]> rules: [#e7e2d9, #2a2826, #ffffff1c, #12b5e533, #ffffff4d, #2a2826, #2a2826, #f0d9df, #ff2a6d33, #c9a45c26];
-    property <[color]> accents: [#c8794a, #c8794a, #d8b4fe, #12b5e5, #ffffff, #c8794a, #c8794a, #e0709a, #fcee0a, #d4af6a];
-    property <[color]> on-accents: [#ffffff, #ffffff, #1a1033, #ffffff, #0e8fc4, #ffffff, #ffffff, #ffffff, #0d0b14, #1a1408];
-    property <[color]> popovers: [#ffffff, #252321, #1a1838, #22343c, #0e9fd9, #252321, #252321, #fffafb, #171327, #1b1d27];
+    // One entry per theme, in `index` order: Light … Blue White, (6, once Auto, and Custom: unused), Sakura, Cyberpunk,
+    // Expedition 33, then the game themes 11 to 20 (Hollow Knight … Ghost of Tsushima).
+    property <[color]> papers: [#faf8f5, #1c1b1a, #0d0c1d, #1a1a1f, #12b5e5, #1c1b1a, #1c1b1a, #fdf6f7, #0d0b14, #13151d, #0e1219, #120b0b, #15140f, #f4efe2, #fbf5e6, #1a1530, #0b0b0b, #2a1d22, #0d1424, #ecebe7];
+    property <[color]> sidebars: [#f2efe9, #171615, #12112a, #1d2e35, #0ea5e9, #171615, #171615, #f8e9ee, #110e1c, #0f1118, #0b0f15, #0e0808, #11100c, #ebe4d1, #efe3c8, #15112a, #000000, #241820, #0a101d, #e2e0da];
+    property <[color]> inks: [#2b2926, #e8e4dd, #f0f4ff, #ffffff, #ffffff, #e8e4dd, #e8e4dd, #4a2d36, #f2f0ff, #ece3cf, #e6e9ef, #f2e6dc, #e8e2cf, #2c3a3a, #4a3626, #f1eaff, #ffffff, #fbeee0, #e9eef7, #1d1d1f];
+    property <[color]> ink-softs: [#5e5952, #b5afa6, #c7cffb, #c9e4ec, #f0f9ff, #b5afa6, #b5afa6, #7a5561, #c3b8f0, #c2b598, #b7c0cf, #cdb8a8, #c2b99c, #4f5f5d, #6e5641, #cbbfe8, #d9d9d9, #e3cdb8, #bcc6d8, #45454a];
+    property <[color]> muteds: [#8c857a, #7d786f, #8189c4, #6f9fae, #c7ecfa, #7d786f, #7d786f, #9e7482, #7a6fa8, #857a66, #6f7c91, #8a7365, #857d65, #7f8a83, #9c8670, #8a7fb0, #8c8c8c, #a88b7c, #74819b, #7d7c78];
+    property <[color]> rules: [#e7e2d9, #2a2826, #ffffff1c, #12b5e533, #ffffff4d, #2a2826, #2a2826, #f0d9df, #ff2a6d33, #c9a45c26, #ffffff14, #ff6a3d26, #d8b25a26, #d9cfb6, #e6d6b4, #ffffff16, #e5191e40, #e9b46b26, #ffffff14, #d3d0c8];
+    property <[color]> accents: [#c8794a, #c8794a, #d8b4fe, #12b5e5, #ffffff, #c8794a, #c8794a, #e0709a, #fcee0a, #d4af6a, #8fd3ff, #ff6a3d, #d8b25a, #1fa9b8, #5a9e3a, #ff5c8a, #e5191e, #d9433b, #ff9a3c, #b3262d];
+    property <[color]> on-accents: [#ffffff, #ffffff, #1a1033, #ffffff, #0e8fc4, #ffffff, #ffffff, #ffffff, #0d0b14, #1a1408, #0b1622, #1a0b07, #1a1608, #ffffff, #ffffff, #2a0716, #ffffff, #ffffff, #1d1006, #ffffff];
+    property <[color]> popovers: [#ffffff, #252321, #1a1838, #22343c, #0e9fd9, #252321, #252321, #fffafb, #171327, #1b1d27, #151b26, #1e1212, #1d1b14, #fbf8ef, #fffaf0, #221c3d, #161616, #33242a, #141d31, #f6f5f2];
 
     out property <color> paper: root.custom ? root.custom-paper : root.papers[root.i];
     out property <color> sidebar: root.custom ? root.custom-sidebar : root.sidebars[root.i];
@@ -90,6 +92,13 @@ export global Theme {
         : root.index == 10 ? root.face("Newsreader")
         : root.index == 9 ? "JetBrains Mono"
         : root.index == 8 ? "Literata"
+        : root.index == 11 ? "Literata"
+        : root.index == 12 ? root.face("Newsreader")
+        : root.index == 13 ? root.face("Newsreader")
+        : root.index == 14 ? "Literata"
+        : root.index == 15 ? "Literata"
+        : root.index == 18 ? root.face("Newsreader")
+        : root.index == 20 ? root.face("Newsreader")
         : root.font-face;
     // Cyberpunk's neon: a glow around accent-coloured marks (ticked boxes, the open-note bar).
     out property <color> neon: root.custom || root.index != 9 ? transparent : root.accent.with-alpha(0.7);
@@ -100,11 +109,24 @@ export global Theme {
         : root.index == 8 ? #f48fb140
         : root.index == 9 ? #ff2a6d38
         : root.index == 10 ? #d4af6a24
+        : root.index == 11 ? #ffffff0d
+        : root.index == 12 ? #e0b0502a
+        : root.index == 13 ? #f0c75e38
+        : root.index == 14 ? #1fa9b81f
+        : root.index == 16 ? #8f6cff33
+        : root.index == 18 ? #e9b46b38
+        : root.index == 19 ? #9fc3ff1c
+        : root.index == 20 ? #b3262d12
         : transparent;
     out property <color> glow-bottom: root.custom ? transparent
         : root.index == 3 ? #7c5cff26
         : root.index == 9 ? #05d9e82e
         : root.index == 10 ? #b0283c33
+        : root.index == 11 ? #8fd3ff2b
+        : root.index == 12 ? #ff4a1f45
+        : root.index == 15 ? #5a9e3a1f
+        : root.index == 16 ? #ff5c8a30
+        : root.index == 19 ? #ff9a3c38
         : transparent;
     // How much of the window background shows through the notes list, so the theme's gradient
     // reaches the whole window instead of stopping at the sidebar.
@@ -122,6 +144,26 @@ export global Theme {
         : root.index == 9 ? @linear-gradient(160deg, #2a0b4a 0%, #0d0b14 50%, #00303d 100%)
         // Expedition 33: night blue with a crimson, painterly glow below.
         : root.index == 10 ? @linear-gradient(180deg, #1b1f2f 0%, #13151d 50%, #36141e 100%)
+        // Hollow Knight.
+        : root.index == 11 ? @linear-gradient(180deg, #131c2a 0%, #0e1219 55%, #0a1220 100%)
+        // Hades.
+        : root.index == 12 ? @linear-gradient(180deg, #1a0d0b 0%, #120b0b 50%, #3d120b 100%)
+        // Elden Ring.
+        : root.index == 13 ? @linear-gradient(180deg, #2a2611 0%, #15140f 55%, #101210 100%)
+        // Zelda.
+        : root.index == 14 ? @linear-gradient(180deg, #e9f1e4 0%, #f4efe2 55%, #f1e8d4 100%)
+        // Stardew Valley.
+        : root.index == 15 ? @linear-gradient(180deg, #eff6dc 0%, #fbf5e6 50%, #f7eacb 100%)
+        // Celeste.
+        : root.index == 16 ? @linear-gradient(180deg, #2b1f52 0%, #1a1530 55%, #3a1736 100%)
+        // Persona 5.
+        : root.index == 17 ? @linear-gradient(180deg, #0b0b0b 0%, #0b0b0b 100%)
+        // Journey.
+        : root.index == 18 ? @linear-gradient(180deg, #7a5236 0%, #2a1d22 50%, #5a2a3c 100%)
+        // Outer Wilds.
+        : root.index == 19 ? @linear-gradient(180deg, #111c36 0%, #0d1424 60%, #0b1120 100%)
+        // Ghost of Tsushima.
+        : root.index == 20 ? @linear-gradient(180deg, #e4e3df 0%, #ecebe7 60%, #ebe3e0 100%)
         : root.paper;
 
     out property <[ThemeInfo]> themes: [
@@ -131,13 +173,28 @@ export global Theme {
         { name: "Ethereal", picture: @image-url("swatches/ethereal.svg"), accent: #d8b4fe },
         { name: "Zima Blue", picture: @image-url("swatches/zima-blue.svg"), accent: #12b5e5 },
         { name: "Blue White", picture: @image-url("swatches/blue-white.svg"), accent: #ffffff },
-        { name: "Auto", picture: @image-url("swatches/auto.svg"), accent: #c8794a },
+        // 6 was Auto (light by day, dark at night), now removed. The number stays taken so the
+        // saved numbers of the themes after it don't change; Settings doesn't show it.
+        { name: "", swatch: transparent, accent: transparent },
         // Its colours come from theme.json, so no picture: halfway between the top and bottom.
         { name: root.custom-name, swatch: root.custom-backdrop-top.mix(root.custom-backdrop-bottom, 0.5), accent: root.custom-theme-accent },
         { name: "Sakura", picture: @image-url("swatches/sakura.svg"), accent: #e0709a },
         { name: "Cyberpunk", picture: @image-url("swatches/cyberpunk.svg"), accent: #fcee0a },
         { name: "Expedition 33", picture: @image-url("swatches/expedition-33.svg"), accent: #d4af6a },
+        { name: "Hollow Knight", picture: @image-url("swatches/hollow-knight.svg"), accent: #8fd3ff },
+        { name: "Hades", picture: @image-url("swatches/hades.svg"), accent: #ff6a3d },
+        { name: "Elden Ring", picture: @image-url("swatches/elden-ring.svg"), accent: #d8b25a },
+        { name: "Zelda", picture: @image-url("swatches/zelda.svg"), accent: #1fa9b8 },
+        { name: "Stardew Valley", picture: @image-url("swatches/stardew-valley.svg"), accent: #5a9e3a },
+        { name: "Celeste", picture: @image-url("swatches/celeste.svg"), accent: #ff5c8a },
+        { name: "Persona 5", picture: @image-url("swatches/persona-5.svg"), accent: #e5191e },
+        { name: "Journey", picture: @image-url("swatches/journey.svg"), accent: #d9433b },
+        { name: "Outer Wilds", picture: @image-url("swatches/outer-wilds.svg"), accent: #ff9a3c },
+        { name: "Ghost of Tsushima", picture: @image-url("swatches/ghost-of-tsushima.svg"), accent: #b3262d },
     ];
+
+    // The themes Settings offers, in order (theme numbers; 6 is unused).
+    out property <[int]> offered: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 
     // Accent colours offered in Settings (hex strings are what gets saved).
     out property <[color]> accent-choices: [#c8794a, #e5484d, #f76b15, #d6a000, #46a758, #12a594, #0090ff, #6e56cf, #d6409f];

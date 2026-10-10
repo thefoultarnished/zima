@@ -385,6 +385,17 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[test]
+    fn live_view_mode_is_saved_and_loaded() {
+        let (store, root) = scratch_store("view-mode-live");
+        fs::write(root.join("state.json"), r#"{"view_mode": 3}"#).unwrap();
+        assert_eq!(store.load_state().view_mode, 3);
+        let state = UiState { view_mode: 3, ..Default::default() };
+        store.save_state(&state).unwrap();
+        assert_eq!(store.load_state().view_mode, 3);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     fn scratch_store(name: &str) -> (Store, PathBuf) {
         let root = std::env::temp_dir().join(format!("zima-store-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);

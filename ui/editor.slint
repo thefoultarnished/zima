@@ -51,17 +51,79 @@ component TextButton {
         clicked => { root.clicked(); }
     }
 }
-import { BlockView, MdBlock } from "markdown.slint";
+import { BacklinkList, BlockView, LinkRow, MdBlock } from "markdown.slint";
 import { NoteRow } from "sidebar.slint";
-
-export struct LinkRow {
-    id: string,
-    title: string,
-}
+import { LiveEditor } from "live.slint";
 
 export struct Suggestion {
     name: string,
     hint: string,
+}
+
+// The @ and / command menu. The caller gives the caret's line (top edge) and where the menu must
+// stay inside. It opens one line below the caret, or above it when there's no room.
+component SuggestionPopup inherits Rectangle {
+    in property <[Suggestion]> suggestions;
+    in property <int> index;
+    in property <length> caret-x;
+    in property <length> caret-y;
+    in property <length> line-height;
+    in property <length> limit-x;
+    in property <length> limit-y;
+
+    property <length> below: root.caret-y + root.line-height;
+    x: min(root.caret-x, root.limit-x - self.width - 12px);
+    y: root.below + self.height > root.limit-y - 8px ? root.caret-y - self.height - 6px : root.below;
+    width: 280px;
+    height: list.preferred-height;
+    border-radius: 10px;
+    background: Theme.popover;
+    border-width: 1px;
+    border-color: Theme.rule;
+    drop-shadow-blur: 18px;
+    drop-shadow-offset-y: 6px;
+    drop-shadow-color: #00000035;
+
+    list := VerticalLayout {
+        padding: 5px;
+        spacing: 2px;
+
+        for suggestion[i] in root.suggestions: Rectangle {
+            height: 34px;
+            border-radius: 7px;
+            background: i == root.index ? Theme.selected : transparent;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 10px;
+
+                Text {
+                    text: suggestion.name;
+                    color: Theme.accent;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: suggestion.hint;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                if i == root.index: Text {
+                    text: "Tab";
+                    color: Theme.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
 }
 
 // The writing column: title + body text, optionally with a live Markdown preview.
@@ -81,7 +143,7 @@ export component Editor {
     in-out property <bool> find-open;
     in-out property <bool> find-replace;
     in property <string> find-status;
-    // 0 = edit, 1 = split, 2 = preview.
+    // 0 = edit, 1 = split, 2 = preview, 3 = live.
     in property <int> view-mode;
     in property <bool> wide;
     in property <bool> show-status: true;
@@ -91,13 +153,21 @@ export component Editor {
     // The note's file couldn't be read: no editing, and a message instead of the text.
     in property <bool> unreadable;
     in property <[MdBlock]> blocks;
+    // Live mode: the rendered blocks before and after the raw part, and the raw part itself.
+    in property <[MdBlock]> live-before;
+    in property <[MdBlock]> live-after;
+    in-out property <string> live-text;
+    in property <int> live-rev;
+    in property <int> live-len;
+    in property <int> live-start;
     in property <[Suggestion]> suggestions;
     in-out property <int> suggestion-index;
 
-    // Selection in the body, for formatting commands.
-    out property <int> sel-anchor: body.anchor-position-byte-offset;
-    out property <int> sel-cursor: body.cursor-position-byte-offset;
-    out property <bool> body-focused: body.has-focus;
+    // Selection in the body, for formatting commands. In Live mode the raw part's offsets are
+    // shifted to the whole note, so the commands see the same offsets as in the other modes.
+    out property <int> sel-anchor: root.view-mode == 3 ? root.live-start + live.sel-anchor : body.anchor-position-byte-offset;
+    out property <int> sel-cursor: root.view-mode == 3 ? root.live-start + live.sel-cursor : body.cursor-position-byte-offset;
+    out property <bool> body-focused: body.has-focus || live.input-focused;
 
     callback title-edited(string);
     // The text and the cursor's byte offset.
@@ -109,6 +179,14 @@ export component Editor {
     // The pointer rests on a block with [[links]] (their titles, window position), or leaves it.
     callback link-hover([string], length, length);
     callback link-hover-end();
+    callback live-edited(string, int, int);
+    callback live-cursor-moved(int);
+    callback live-activate(int);
+    callback live-end();
+    // Ctrl+click on a rendered block in Live mode: open its first link.
+    callback live-follow(int);
+    // Return true if Rust handled the key (the text box then ignores it).
+    callback live-key(string) -> bool;
     callback open-note(string);
     // The empty screen's "Today's note" button.
     callback open-daily();
@@ -128,22 +206,43 @@ export component Editor {
     }
 
 
+    // Before the raw part moves to other blocks: remember the caret's height on screen.
+    public function live-anchor() {
+        live.live-anchor();
+    }
+
     // Select text without taking focus (find highlights a match while you keep typing in the find box).
     public function select-in-body(anchor: int, cursor: int) {
-        body.set-selection-offsets(anchor, cursor);
+        if (root.view-mode == 3) {
+            live.set-live-selection(anchor - root.live-start, cursor - root.live-start, false);
+        } else {
+            body.set-selection-offsets(anchor, cursor);
+        }
     }
 
     public function focus-title() {
-        title.focus();
+        if (root.view-mode == 3) {
+            live.focus-title();
+        } else {
+            title.focus();
+        }
     }
 
     public function focus-body() {
-        body.focus();
+        if (root.view-mode == 3) {
+            live.focus-live();
+        } else {
+            body.focus();
+        }
     }
 
     public function set-body-selection(anchor: int, cursor: int) {
-        body.focus();
-        body.set-selection-offsets(anchor, cursor);
+        if (root.view-mode == 3) {
+            live.set-live-selection(anchor - root.live-start, cursor - root.live-start, true);
+        } else {
+            body.focus();
+            body.set-selection-offsets(anchor, cursor);
+        }
     }
 
     // The hover card would be left pointing at something that moved or went away.
@@ -154,6 +253,7 @@ export component Editor {
     changed current-id => {
         scroll.content-y = 0;
         preview.content-y = 0;
+        live.scroll-to-top();
     }
 
     property <length> edit-width: root.view-mode == 2 ? 0px : root.view-mode == 1 ? root.width * root.split-ratio : root.width;
@@ -166,7 +266,7 @@ export component Editor {
         x: 0;
         width: root.edit-width;
         height: root.height - root.status-height;
-        visible: root.has-note && root.view-mode != 2;
+        visible: root.has-note && (root.view-mode == 0 || root.view-mode == 1);
 
         // Split view: the text fills its pane, so it follows the divider. Otherwise a readable
         // 680 px column, unless Wide is on.
@@ -276,80 +376,15 @@ export component Editor {
         }
 
         // @ command suggestions, just below the cursor (or above it near the bottom of the view).
-        if root.suggestions.length > 0: Rectangle {
-            property <length> below: body.y + scroll.cursor.y + root.font-size * 1.5;
-            x: min(body.x + scroll.cursor.x, scroll.visible-width - self.width - 12px);
-            y: self.below + self.height > scroll.visible-height - scroll.content-y - 8px
-                ? body.y + scroll.cursor.y - self.height - 6px
-                : self.below;
-            width: 280px;
-            height: list.preferred-height;
-            border-radius: 10px;
-            background: Theme.popover;
-            border-width: 1px;
-            border-color: Theme.rule;
-            drop-shadow-blur: 18px;
-            drop-shadow-offset-y: 6px;
-            drop-shadow-color: #00000035;
-
-            list := VerticalLayout {
-                padding: 5px;
-                spacing: 2px;
-
-                for suggestion[i] in root.suggestions: Rectangle {
-                    height: 34px;
-                    border-radius: 7px;
-                    background: i == root.suggestion-index ? Theme.selected : transparent;
-
-                    HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        spacing: 10px;
-
-                        Text {
-                            text: suggestion.name;
-                            color: Theme.accent;
-                            font-size: 13px;
-                            font-weight: 600;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            horizontal-stretch: 1;
-                            text: suggestion.hint;
-                            color: Theme.muted;
-                            font-size: 12px;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-
-                        if i == root.suggestion-index: Text {
-                            text: "Tab";
-                            color: Theme.muted;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
+        if root.suggestions.length > 0 && root.view-mode != 3: SuggestionPopup {
+            suggestions: root.suggestions;
+            index: root.suggestion-index;
+            caret-x: body.x + scroll.cursor.x;
+            caret-y: body.y + scroll.cursor.y;
+            line-height: root.font-size * 1.5;
+            limit-x: scroll.visible-width;
+            limit-y: scroll.visible-height - scroll.content-y;
         }
-    }
-
-    // Spotlight: fades towards the top and bottom of the edit pane, leaving the writing line clear.
-    // The top fade starts under the title, so the title stays readable while it's on screen.
-    if root.has-note && root.spotlight && root.view-mode != 2: Rectangle {
-        x: 0;
-        y: max(0px, scroll.content-y + title-box.y + title-box.height);
-        width: root.edit-width;
-        height: root.height * 0.32;
-        background: @linear-gradient(180deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
-    }
-    if root.has-note && root.spotlight && root.view-mode != 2: Rectangle {
-        x: 0;
-        y: root.height * 0.6;
-        width: root.edit-width;
-        height: root.height * 0.4;
-        background: @linear-gradient(0deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
     }
 
     // Split divider: drag to resize (25% to 75%, as in Rust), double-click to share the width equally.
@@ -384,12 +419,72 @@ export component Editor {
         }
     }
 
+    // Live mode (view mode 3): every block drawn like the preview, the block being edited as raw Markdown.
+    live := LiveEditor {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height - root.status-height;
+        visible: root.has-note && root.view-mode == 3;
+        before: root.live-before;
+        after: root.live-after;
+        live-text <=> root.live-text;
+        live-rev: root.live-rev;
+        live-len: root.live-len;
+        live-start: root.live-start;
+        unreadable: root.unreadable;
+        typewriter: root.typewriter;
+        wide: root.wide;
+        note-title <=> root.note-title;
+        title-edited(text) => { root.title-edited(text); }
+        live-edited(text, cursor, rev) => { root.live-edited(text, cursor, rev); }
+        live-cursor-moved(cursor) => { root.live-cursor-moved(cursor); }
+        live-activate(line) => { root.live-activate(line); }
+        live-end => { root.live-end(); }
+        live-follow(line) => { root.live-follow(line); }
+        live-key(key) => { return root.live-key(key); }
+        backlinks: root.backlinks;
+        open-note(id) => { root.open-note(id); }
+        toggle-task(line) => { root.toggle-task(line); }
+        link-clicked(url) => { root.link-clicked(url); }
+        link-hover(titles, x, y) => { root.link-hover(titles, x, y); }
+        link-hover-end => { root.link-hover-end(); }
+    }
+
+    // Spotlight and the Live @ menu draw over the Live editor, so they come after it.
+    // Spotlight: fades towards the top and bottom of the edit pane, leaving the writing line clear.
+    // The top fade starts under the title, so the title stays readable while it's on screen.
+    if root.has-note && root.spotlight && (root.view-mode == 0 || root.view-mode == 1 || root.view-mode == 3): Rectangle {
+        x: 0;
+        y: max(0px, root.view-mode == 3 ? live.content-y + live.title-bottom : scroll.content-y + title-box.y + title-box.height);
+        width: root.edit-width;
+        height: root.height * 0.32;
+        background: @linear-gradient(180deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
+    }
+    if root.has-note && root.spotlight && (root.view-mode == 0 || root.view-mode == 1 || root.view-mode == 3): Rectangle {
+        x: 0;
+        y: root.height * 0.6;
+        width: root.edit-width;
+        height: root.height * 0.4;
+        background: @linear-gradient(0deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
+    }
+
+    if root.suggestions.length > 0 && root.view-mode == 3: SuggestionPopup {
+        suggestions: root.suggestions;
+        index: root.suggestion-index;
+        caret-x: live.live-caret.x;
+        caret-y: live.live-caret.y;
+        line-height: root.font-size * 1.5;
+        limit-x: root.width;
+        limit-y: root.height - root.status-height;
+    }
+
     // Preview pane
     preview := ScrollView {
         x: root.edit-width;
         width: root.width - root.edit-width;
         height: root.height - root.status-height;
-        visible: root.has-note && root.view-mode != 0;
+        visible: root.has-note && (root.view-mode == 1 || root.view-mode == 2);
         scrolled => { root.link-hover-end(); }
 
         // Split view: the text fills its pane, so it follows the divider. Otherwise a readable
@@ -433,45 +528,9 @@ export component Editor {
                 link-hover-end => { root.link-hover-end(); }
             }
 
-            if root.backlinks.length > 0: VerticalLayout {
-                padding-top: 32px;
-                spacing: 8px;
-
-                Rectangle {
-                    height: 1px;
-                    background: Theme.rule;
-                }
-
-                Text {
-                    text: "LINKED FROM";
-                    color: Theme.muted;
-                    font-size: 11px;
-                    font-weight: 700;
-                    letter-spacing: 1.1px;
-                }
-
-                for link in root.backlinks: HorizontalLayout {
-                    alignment: start;
-                    Rectangle {
-                        width: link-text.preferred-width + 20px;
-                        height: 28px;
-                        border-radius: 8px;
-                        background: link-touch.has-hover ? Theme.selected : Theme.hover;
-
-                        link-text := Text {
-                            text: "\u{2190}  " + link.title;
-                            color: Theme.accent;
-                            font-size: 13px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        link-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.open-note(link.id); }
-                        }
-                    }
-                }
+            if root.backlinks.length > 0: BacklinkList {
+                links: root.backlinks;
+                open-note(id) => { root.open-note(id); }
             }
         }
     }

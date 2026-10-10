@@ -18,6 +18,12 @@ export struct MdBlock {
     note-links: [string],
 }
 
+// A note that links to the open one ("Linked from").
+export struct LinkRow {
+    id: string,
+    title: string,
+}
+
 // One note shown in the link hover card.
 export struct LinkPreview {
     title: string,
@@ -33,10 +39,62 @@ component Rich inherits StyledText {
     link-color: Theme.accent;
 }
 
+// The notes linking to the open note, as chips under the text. Shown only when there are some.
+export component BacklinkList inherits VerticalLayout {
+    in property <[LinkRow]> links;
+    callback open-note(string);
+
+    padding-top: 32px;
+    spacing: 8px;
+
+    Rectangle {
+        height: 1px;
+        background: Theme.rule;
+    }
+
+    Text {
+        text: "LINKED FROM";
+        color: Theme.muted;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1.1px;
+    }
+
+    for link in root.links: HorizontalLayout {
+        alignment: start;
+        Rectangle {
+            width: link-text.preferred-width + 20px;
+            height: 28px;
+            border-radius: 8px;
+            background: link-touch.has-hover ? Theme.selected : Theme.hover;
+
+            link-text := Text {
+                text: "\u{2190}  " + link.title;
+                color: Theme.accent;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            link-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.open-note(link.id); }
+            }
+        }
+    }
+}
+
 export component BlockView {
     in property <MdBlock> block;
     callback toggle-task(int);
     callback link-clicked(string);
+
+    // Live mode: a click on the block asks the app to edit it as raw Markdown.
+    // Ctrl+click opens the block's first link instead.
+    in property <bool> live: false;
+    callback activate();
+    callback follow-link();
+    property <bool> ctrl-down;
 
     // Preview only: hovering a block with [[links]] reports them so the app can show a card.
     in property <bool> link-previews: false;
@@ -61,6 +119,15 @@ export component BlockView {
                 // A clear step below the note title (28 px), so a first heading doesn't read as a second title.
                 default-font-size: (root.block.level == 1 ? 22px : root.block.level == 2 ? 19px : root.block.level == 3 ? 17px : 16px) * Theme.text-scale;
                 link-clicked(url) => { root.link-clicked(url); }
+            }
+
+            // Text the live editor can't draw (e.g. a block it doesn't understand), shown as-is.
+            if root.block.kind == "raw": Text {
+                text: root.block.plain;
+                color: Theme.muted;
+                font-family: "JetBrains Mono";
+                font-size: 14px * Theme.text-scale;
+                wrap: word-wrap;
             }
 
             if root.block.kind == "paragraph": Rich {
@@ -235,6 +302,28 @@ export component BlockView {
                     y: parent.height - 1px;
                     height: 1px;
                     background: Theme.rule;
+                }
+            }
+        }
+
+        // Live mode: rich text takes every press, even off a link, so a click on the block is
+        // caught here, on top of it. A task's checkbox stays uncovered so it still ticks.
+        if root.live: live-touch := TouchArea {
+            x: root.block.kind == "task" ? root.block.indent * 22px + 16px : 0px;
+            y: 0px;
+            width: parent.width - self.x;
+            height: parent.height;
+            // Remember whether Ctrl was held when the press started, for the click that follows.
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.down) {
+                    root.ctrl-down = ev.modifiers.control;
+                }
+            }
+            clicked => {
+                if (root.ctrl-down) {
+                    root.follow-link();
+                } else {
+                    root.activate();
                 }
             }
         }

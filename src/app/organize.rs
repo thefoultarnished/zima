@@ -7,6 +7,7 @@ use std::cmp::Reverse;
 
 use super::{App, display_title};
 use crate::model::{Note, NoteId, now_ms};
+use crate::system;
 use crate::{CalendarDay, LinkPreview, LinkRow, TagRow, Theme};
 
 /// Notes in the Bin longer than this are deleted for good.
@@ -270,6 +271,15 @@ impl App {
     }
 
     // ----- Links -----
+
+    /// A link in a note was clicked (or Ctrl+clicked in Live mode): `note:Title` opens or creates
+    /// that note, anything else goes to the browser.
+    pub fn follow_link(&mut self, url: &str) {
+        match url.strip_prefix("note:") {
+            Some(title) => self.open_link(&title.replace("%20", " ")),
+            None => system::open_url(url),
+        }
+    }
 
     /// `[[Title]]` clicked: open that note, or create it.
     pub fn open_link(&mut self, title: &str) {

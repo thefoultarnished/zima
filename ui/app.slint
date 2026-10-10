@@ -15,8 +15,8 @@ import "../fonts/JetBrainsMono-Italic.ttf";
 import { Theme } from "theme.slint";
 import { ColourDot, ColourPicker, FormatButton, Icon, IconButton, Icons, ResizeEdge, TrafficLight } from "widgets.slint";
 import { NoteRow, Sidebar, TagRow } from "sidebar.slint";
-import { Editor, LinkRow, Suggestion } from "editor.slint";
-import { LinkPreview, LinkPreviewCard, MdBlock } from "markdown.slint";
+import { Editor, Suggestion } from "editor.slint";
+import { LinkPreview, LinkPreviewCard, LinkRow, MdBlock } from "markdown.slint";
 import { ReminderPopover, ReminderRow, Toast } from "reminders.slint";
 import { SettingsPopover, SettingsWindow } from "settings.slint";
 import { Presentation } from "present.slint";
@@ -200,6 +200,13 @@ export component AppWindow inherits Window {
     in property <bool> show-tags: true;
     in property <bool> show-archive;
     in-out property <int> view-mode;
+    // Live mode (view mode 3): the raw part being edited, the rendered blocks around it, and its place in the note.
+    in-out property <string> live-text;
+    in property <[MdBlock]> live-before;
+    in property <[MdBlock]> live-after;
+    in property <int> live-rev;
+    in property <int> live-len;
+    in property <int> live-start;
     in-out property <bool> wide;
     in-out property <bool> zen;
     in-out property <bool> format-bar;
@@ -323,6 +330,13 @@ export component AppWindow inherits Window {
     callback title-edited(string);
     callback body-edited(string, int);
     callback cursor-moved(int);
+    callback live-edited(string, int, int);
+    callback live-cursor-moved(int);
+    callback live-activate(int);
+    callback live-follow(int);
+    callback live-end();
+    // Return true if Rust handled the key (the text box then ignores it).
+    callback live-key(string) -> bool;
     callback accept-suggestion(int);
     callback dismiss-suggestions();
     callback format(string);
@@ -417,6 +431,10 @@ export component AppWindow inherits Window {
 
     public function set-body-selection(anchor: int, cursor: int) {
         editor.set-body-selection(anchor, cursor);
+    }
+
+    public function live-anchor() {
+        editor.live-anchor();
     }
 
     function toggle-sidebar() {
@@ -817,7 +835,7 @@ export component AppWindow inherits Window {
                                 width: root.timer-text != "" ? 8px : 0px;
                             }
 
-                            // Edit / Split / Preview (Ctrl+E cycles).
+                            // Edit / Split / Preview / Live (Ctrl+E cycles).
                             VerticalLayout {
                                 alignment: center;
                                 visible: root.has-note;
@@ -844,6 +862,12 @@ export component AppWindow inherits Window {
                                             icon: Icons.eye;
                                             selected: root.view-mode == 2;
                                             clicked => { root.change-view-mode(2); }
+                                        }
+                                        ModeButton {
+                                            description: "Live mode";
+                                            icon: Icons.live;
+                                            selected: root.view-mode == 3;
+                                            clicked => { root.change-view-mode(3); }
                                         }
                                     }
                                 }
@@ -1061,6 +1085,18 @@ export component AppWindow inherits Window {
                     open-note(id) => { root.open-note(id); }
                     recent-notes: root.recent-notes;
                     open-daily => { root.run-command("daily"); }
+                    live-text <=> root.live-text;
+                    live-before: root.live-before;
+                    live-after: root.live-after;
+                    live-rev: root.live-rev;
+                    live-len: root.live-len;
+                    live-start: root.live-start;
+                    live-edited(text, cursor, rev) => { root.live-edited(text, cursor, rev); }
+                    live-cursor-moved(cursor) => { root.live-cursor-moved(cursor); }
+                    live-activate(line) => { root.live-activate(line); }
+                    live-follow(line) => { root.live-follow(line); }
+                    live-end => { root.live-end(); }
+                    live-key(key) => { return root.live-key(key); }
                 }
             }
         }

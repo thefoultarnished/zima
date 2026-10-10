@@ -209,8 +209,8 @@ impl App {
                         ui.set_view_mode(1);
                         self.set_view_mode(1);
                     }
-                    ui.invoke_set_body_selection(offset as i32, offset as i32);
                 }
+                self.show_selection(offset, offset, true);
                 self.cursor = offset;
             }
             PaletteEntry::MergeInto(target) => self.merge_current_into(target),
@@ -243,7 +243,7 @@ impl App {
                 }
             }
             "cycle-view" => {
-                let mode = (ui.get_view_mode() + 1) % 3;
+                let mode = (ui.get_view_mode() + 1) % 4;
                 ui.set_view_mode(mode);
                 self.set_view_mode(mode);
             }
@@ -256,10 +256,11 @@ impl App {
             "find" => ui.invoke_open_find(false),
             "replace" => ui.invoke_open_find(true),
             "outline" => self.open_palette(PaletteMode::Outline),
-            "mode-edit" | "mode-split" | "mode-preview" => {
+            "mode-edit" | "mode-split" | "mode-preview" | "mode-live" => {
                 let mode = match id {
                     "mode-edit" => 0,
                     "mode-split" => 1,
+                    "mode-live" => 3,
                     _ => 2,
                 };
                 ui.set_view_mode(mode);

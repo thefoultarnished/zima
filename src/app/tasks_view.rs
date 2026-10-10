@@ -131,8 +131,8 @@ impl App {
                 ui.set_view_mode(1);
                 self.set_view_mode(1);
             }
-            ui.invoke_set_body_selection(offset as i32, offset as i32);
         }
+        self.show_selection(offset, offset, true);
     }
 }
 

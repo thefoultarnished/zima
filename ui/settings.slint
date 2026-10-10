@@ -169,12 +169,14 @@ component ThemePicker {
 
     VerticalLayout {
         spacing: 8px;
-        for line in Math.ceil(Theme.themes.length / root.columns): HorizontalLayout {
+        for line in Math.ceil(Theme.offered.length / root.columns): HorizontalLayout {
             spacing: 8px;
             for col in root.columns: cell := Rectangle {
-                property <int> index: line * root.columns + col;
+                // The theme number shown in this cell (Theme.offered skips unused numbers).
+                property <int> slot: line * root.columns + col;
+                property <int> index: self.slot < Theme.offered.length ? Theme.offered[self.slot] : -1;
                 property <bool> selected: Theme.selected-theme == self.index;
-                visible: self.index < Theme.themes.length;
+                visible: self.slot < Theme.offered.length;
                 width: root.cell-width;
                 height: 58px;
                 accessible-role: button;
