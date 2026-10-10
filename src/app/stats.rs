@@ -55,12 +55,12 @@ impl App {
         let listed: Vec<_> = self.notes.iter().filter(|n| n.is_listed()).collect();
 
         ui.set_stats_summary(StatSummary {
-            today: words_on(today) as i32,
-            week: week as i32,
+            today: thousands(u64::from(words_on(today))).into(),
+            week: thousands(u64::from(week)).into(),
             streak,
-            best: best as i32,
+            best: thousands(u64::from(best)).into(),
             notes: listed.len() as i32,
-            words: listed.iter().map(|n| n.body.split_whitespace().count()).sum::<usize>() as i32,
+            words: thousands(listed.iter().map(|n| n.body.split_whitespace().count() as u64).sum()).into(),
             focus_today: *self.focus.get(&today.format("%Y-%m-%d").to_string()).unwrap_or(&0) as i32,
             focus_week: (0..7)
                 .map(|d| *self.focus.get(&(monday + Duration::days(d)).format("%Y-%m-%d").to_string()).unwrap_or(&0))
@@ -77,11 +77,60 @@ impl App {
                 let level = if date > today || words == 0 { 0 } else { 1 + ((words as f32 / max) * 3.0).round() as i32 };
                 StatCell {
                     level: level.min(4),
-                    label: if date > today { String::new() } else { format!("{}: {words} words", date.format("%a %-d %b")) }.into(),
+                    label: if date > today { String::new() } else { format!("{}: {} words", date.format("%a %-d %b"), thousands(u64::from(words))) }.into(),
                 }
             })
             .collect();
         ui.set_stats_cells(ModelRc::new(VecModel::from(cells)));
+        let months: Vec<slint::SharedString> = month_labels(start, WEEKS).into_iter().map(Into::into).collect();
+        ui.set_stats_months(ModelRc::new(VecModel::from(months)));
         ui.set_stats_open(true);
+    }
+}
+
+/// A count with thousands commas: 23100 → "23,100".
+fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// For each week of the heatmap (starting on Monday `start`): the month's short name on the first
+/// week that starts in a new month, empty otherwise, so the names sit above where each month begins.
+fn month_labels(start: NaiveDate, weeks: i64) -> Vec<String> {
+    (0..weeks)
+        .map(|week| {
+            let monday = start + Duration::weeks(week);
+            let new_month = week == 0 || (monday - Duration::weeks(1)).month() != monday.month();
+            if new_month { monday.format("%b").to_string() } else { String::new() }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_get_thousands_commas() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(2300), "2,300");
+        assert_eq!(thousands(23100), "23,100");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn month_names_mark_where_months_start() {
+        // Mondays: 31 Aug, 7 Sep, 14 Sep, 21 Sep, 28 Sep, 5 Oct.
+        let start = NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+        assert_eq!(month_labels(start, 6), vec!["Aug", "Sep", "", "", "", "Oct"]);
+        assert!(month_labels(start, 0).is_empty());
     }
 }

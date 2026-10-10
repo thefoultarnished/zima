@@ -139,6 +139,7 @@ export component AppWindow inherits Window {
     in-out property <bool> stats-open;
     in property <StatSummary> stats-summary;
     in property <[StatCell]> stats-cells;
+    in property <[string]> stats-months;
     // Sync
     in property <string> sync-location;
     in property <bool> sync-active;
@@ -451,10 +452,27 @@ export component AppWindow inherits Window {
         editor.focus-body();
     }
 
-    // Window backdrop; its opacity is the transparency setting.
+    // Window backdrop; its opacity is the transparency setting. Some themes add a soft glow of
+    // colour in two corners.
     Rectangle {
         background: Theme.backdrop;
         opacity: Theme.surface-alpha;
+        clip: true;
+
+        if Theme.glow-top != transparent: Rectangle {
+            x: parent.width - self.width * 0.6;
+            y: -self.height * 0.45;
+            width: 900px;
+            height: 900px;
+            background: @radial-gradient(circle, Theme.glow-top 0%, Theme.glow-top.with-alpha(0) 70%);
+        }
+        if Theme.glow-bottom != transparent: Rectangle {
+            x: -self.width * 0.45;
+            y: parent.height - self.height * 0.55;
+            width: 900px;
+            height: 900px;
+            background: @radial-gradient(circle, Theme.glow-bottom 0%, Theme.glow-bottom.with-alpha(0) 70%);
+        }
     }
 
     // App-wide shortcuts, seen before the focused text field. It's focused explicitly (focus-default)
@@ -1041,6 +1059,8 @@ export component AppWindow inherits Window {
                     find-closed => { root.find-closed(); }
                     backlinks: root.backlinks;
                     open-note(id) => { root.open-note(id); }
+                    recent-notes: root.recent-notes;
+                    open-daily => { root.run-command("daily"); }
                 }
             }
         }
@@ -1145,6 +1165,7 @@ export component AppWindow inherits Window {
             y: max(56px, (parent.height - self.height) / 2 - 40px);
             summary: root.stats-summary;
             cells: root.stats-cells;
+            months: root.stats-months;
             close => { root.stats-open = false; }
         }
     }

@@ -52,6 +52,7 @@ component TextButton {
     }
 }
 import { BlockView, MdBlock } from "markdown.slint";
+import { NoteRow } from "sidebar.slint";
 
 export struct LinkRow {
     id: string,
@@ -109,6 +110,10 @@ export component Editor {
     callback link-hover([string], length, length);
     callback link-hover-end();
     callback open-note(string);
+    // The empty screen's "Today's note" button.
+    callback open-daily();
+    // Notes to jump back into, shown when no note is open.
+    in property <[NoteRow]> recent-notes;
     // Notes linking here with [[…]], shown under the preview.
     in property <[LinkRow]> backlinks;
     callback find-edited(string);
@@ -153,11 +158,14 @@ export component Editor {
 
     property <length> edit-width: root.view-mode == 2 ? 0px : root.view-mode == 1 ? root.width * root.split-ratio : root.width;
     property <length> font-size: 16px * Theme.text-scale;
+    // Room under the text for the word count, so it never sits on top of the last lines.
+    property <length> status-height: root.has-note && root.show-status ? 34px : 0px;
 
     // Edit pane
     scroll := ScrollView {
         x: 0;
         width: root.edit-width;
+        height: root.height - root.status-height;
         visible: root.has-note && root.view-mode != 2;
 
         // Split view: the text fills its pane, so it follows the divider. Otherwise a readable
@@ -195,7 +203,7 @@ export component Editor {
                 text <=> root.note-title;
                 single-line: false;
                 wrap: word-wrap;
-                font-family: Theme.font;
+                font-family: Theme.heading-font;
                 font-size: 28px * Theme.text-scale;
                 font-weight: 700;
                 color: Theme.heading;
@@ -213,7 +221,7 @@ export component Editor {
             visible: root.note-title.is-empty;
             text: "Untitled";
             color: Theme.muted.with-alpha(0.6);
-            font-family: Theme.font;
+            font-family: Theme.heading-font;
             font-size: 28px * Theme.text-scale;
             font-weight: 700;
         }
@@ -229,7 +237,7 @@ export component Editor {
             line-height-factor: Theme.line-spacing;
             single-line: false;
             wrap: word-wrap;
-            font-family: Theme.font;
+            font-family: Theme.font-face;
             font-size: root.font-size;
             color: Theme.ink;
             selection-background-color: Theme.selection;
@@ -263,7 +271,7 @@ export component Editor {
                 : "Start writing…  or try \u{201c}@remind me to stretch in 20 min\u{201d}";
             wrap: word-wrap;
             color: root.unreadable ? Theme.danger : Theme.muted;
-            font-family: Theme.font;
+            font-family: Theme.font-face;
             font-size: root.font-size;
         }
 
@@ -318,7 +326,7 @@ export component Editor {
                         if i == root.suggestion-index: Text {
                             text: "Tab";
                             color: Theme.muted;
-                            font-size: 10.5px;
+                            font-size: 11px;
                             vertical-alignment: center;
                         }
                     }
@@ -328,9 +336,10 @@ export component Editor {
     }
 
     // Spotlight: fades towards the top and bottom of the edit pane, leaving the writing line clear.
+    // The top fade starts under the title, so the title stays readable while it's on screen.
     if root.has-note && root.spotlight && root.view-mode != 2: Rectangle {
         x: 0;
-        y: 0;
+        y: max(0px, scroll.content-y + title-box.y + title-box.height);
         width: root.edit-width;
         height: root.height * 0.32;
         background: @linear-gradient(180deg, Theme.paper 15%, Theme.paper.with-alpha(0) 100%);
@@ -379,6 +388,7 @@ export component Editor {
     preview := ScrollView {
         x: root.edit-width;
         width: root.width - root.edit-width;
+        height: root.height - root.status-height;
         visible: root.has-note && root.view-mode != 0;
         scrolled => { root.link-hover-end(); }
 
@@ -398,7 +408,7 @@ export component Editor {
             Text {
                 text: root.note-title.is-empty ? "Untitled" : root.note-title;
                 color: root.note-title.is-empty ? Theme.muted.with-alpha(0.6) : Theme.heading;
-                font-family: Theme.font;
+                font-family: Theme.heading-font;
                 font-size: 28px * Theme.text-scale;
                 font-weight: 700;
                 wrap: word-wrap;
@@ -435,7 +445,7 @@ export component Editor {
                 Text {
                     text: "LINKED FROM";
                     color: Theme.muted;
-                    font-size: 10.5px;
+                    font-size: 11px;
                     font-weight: 700;
                     letter-spacing: 1.1px;
                 }
@@ -631,62 +641,129 @@ export component Editor {
         }
     }
 
-    // Shown when every note is closed.
-    if !root.has-note: VerticalLayout {
+    // Shown when every note is closed: notes to jump back into, a new note or today's, and a tip.
+    if !root.has-note: HorizontalLayout {
         alignment: center;
-        spacing: 14px;
 
-        Text {
-            text: "No note open";
-            color: Theme.muted;
-            font-size: 15px;
-            horizontal-alignment: center;
-        }
-
-        HorizontalLayout {
+        VerticalLayout {
+            width: min(380px, root.width - 48px);
             alignment: center;
+            spacing: 18px;
 
-            Rectangle {
-                width: 150px;
-                height: 34px;
-                border-radius: 8px;
-                background: new-touch.has-hover ? Theme.selected : Theme.hover;
-                animate background { duration: 120ms; }
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Nothing open";
+                    color: Theme.heading;
+                    font-family: Theme.heading-font;
+                    font-size: 22px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "Pick up where you left off, or start something new.";
+                    color: Theme.muted;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+            }
 
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                for action[i] in [
+                    { label: "New note", keys: "Ctrl+N", icon: Icons.plus },
+                    { label: "Today\u{2019}s note", keys: "Ctrl+D", icon: Icons.edit },
+                ]: Rectangle {
+                    height: 34px;
+                    width: action-row.preferred-width + 24px;
+                    border-radius: 8px;
+                    background: action-touch.has-hover ? Theme.selected : Theme.hover;
+                    animate background { duration: 120ms; }
+                    accessible-role: button;
+                    accessible-label: action.label;
+                    accessible-action-default => { if (i == 0) { root.new-note(); } else { root.open-daily(); } }
 
-                    VerticalLayout {
-                        alignment: center;
-                        Icon {
-                            width: 13px;
-                            height: 13px;
-                            commands: Icons.plus;
-                            stroke: Theme.ink-soft;
+                    action-row := HorizontalLayout {
+                        x: 12px;
+                        width: self.preferred-width;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            Icon {
+                                width: 13px;
+                                height: 13px;
+                                commands: action.icon;
+                                stroke: Theme.ink-soft;
+                            }
+                        }
+                        Text {
+                            text: action.label;
+                            color: Theme.ink;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: action.keys;
+                            color: Theme.muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
                         }
                     }
 
-                    Text {
-                        text: "New note";
-                        color: Theme.ink-soft;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                    }
-
-                    Text {
-                        text: "Ctrl+N";
-                        color: Theme.muted;
-                        font-size: 11px;
-                        vertical-alignment: center;
+                    action-touch := TouchArea {
+                        clicked => { if (i == 0) { root.new-note(); } else { root.open-daily(); } }
                     }
                 }
+            }
 
-                new-touch := TouchArea {
-                    clicked => {
-                        root.new-note();
+            if root.recent-notes.length > 0: VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: "RECENT";
+                    color: Theme.muted;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 1px;
+                }
+                for note in root.recent-notes: Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    background: recent-touch.has-hover ? Theme.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Open " + note.title;
+                    accessible-action-default => { root.open-note(note.id); }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: note.title;
+                            color: Theme.ink;
+                            font-size: 13px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: note.meta;
+                            color: Theme.muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    recent-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.open-note(note.id); }
                     }
                 }
+            }
+
+            Text {
+                text: "Tip: Ctrl+K finds any note or command.";
+                color: Theme.muted;
+                font-size: 12px;
             }
         }
     }

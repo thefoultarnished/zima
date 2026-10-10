@@ -20,8 +20,14 @@ export global Theme {
     in-out property <color> custom-accent;
     // Opacity of the window surfaces (0.3–1.0); below 1 the Mica backdrop shows through.
     in-out property <float> surface-alpha: 1.0;
-    // Font for note text; the rest of the interface is always Inter.
+    // Font for note text, by the name saved in settings; the rest of the interface is always Inter.
     in-out property <string> font: "Inter";
+    // The family to draw `font` with. Newsreader's files call their family "Newsreader 16pt 16pt",
+    // so asking for "Newsreader" would fall back to another font.
+    out property <string> font-face: root.face(root.font);
+    public pure function face(name: string) -> string {
+        return name == "Newsreader" ? "Newsreader 16pt 16pt" : name;
+    }
     // Ctrl + / Ctrl − text size, and line spacing, for note text.
     in-out property <float> text-scale: 1.0;
     // Size of the whole interface (shown in Settings; the window itself is scaled from Rust).
@@ -57,10 +63,8 @@ export global Theme {
     property <[color]> sidebars: [#f2efe9, #171615, #12112a, #1d2e35, #0ea5e9, #171615, #171615, #f8e9ee, #110e1c, #0f1118];
     property <[color]> inks: [#2b2926, #e8e4dd, #f0f4ff, #ffffff, #ffffff, #e8e4dd, #e8e4dd, #4a2d36, #f2f0ff, #ece3cf];
     property <[color]> ink-softs: [#5e5952, #b5afa6, #c7cffb, #c9e4ec, #f0f9ff, #b5afa6, #b5afa6, #7a5561, #c3b8f0, #c2b598];
-    property <[color]> muteds: [#a39d93, #7d786f, #8189c4, #6f9fae, #c7ecfa, #7d786f, #7d786f, #b48a96, #7a6fa8, #857a66];
+    property <[color]> muteds: [#8c857a, #7d786f, #8189c4, #6f9fae, #c7ecfa, #7d786f, #7d786f, #9e7482, #7a6fa8, #857a66];
     property <[color]> rules: [#e7e2d9, #2a2826, #ffffff1c, #12b5e533, #ffffff4d, #2a2826, #2a2826, #f0d9df, #ff2a6d33, #c9a45c26];
-    property <[color]> hovers: [#00000009, #ffffff0c, #ffffff10, #12b5e514, #ffffff1f, #ffffff0c, #ffffff0c, #c7577a0d, #05d9e814, #e9dfc80d];
-    property <[color]> selecteds: [#00000010, #ffffff16, #ffffff1e, #12b5e52e, #ffffff38, #ffffff16, #ffffff16, #c7577a1a, #ff2a6d2a, #c9a45c22];
     property <[color]> accents: [#c8794a, #c8794a, #d8b4fe, #12b5e5, #ffffff, #c8794a, #c8794a, #e0709a, #fcee0a, #d4af6a];
     property <[color]> on-accents: [#ffffff, #ffffff, #1a1033, #ffffff, #0e8fc4, #ffffff, #ffffff, #ffffff, #0d0b14, #1a1408];
     property <[color]> popovers: [#ffffff, #252321, #1a1838, #22343c, #0e9fd9, #252321, #252321, #fffafb, #171327, #1b1d27];
@@ -71,8 +75,9 @@ export global Theme {
     out property <color> ink-soft: root.custom ? root.custom-ink-soft : root.ink-softs[root.i];
     out property <color> muted: root.custom ? root.custom-muted : root.muteds[root.i];
     out property <color> rule: root.custom ? root.custom-rule : root.rules[root.i];
-    out property <color> hover: root.custom ? root.custom-hover : root.hovers[root.i];
-    out property <color> selected: root.custom ? root.custom-selected : root.selecteds[root.i];
+    // Hover and selection are a light wash of the accent, so they take on the theme's colour.
+    out property <color> hover: root.custom ? root.custom-hover : root.accent.with-alpha(root.dark ? 0.10 : 0.08);
+    out property <color> selected: root.custom ? root.custom-selected : root.accent.with-alpha(root.dark ? 0.18 : 0.14);
     out property <color> accent: root.has-custom-accent ? root.custom-accent : root.custom ? root.custom-theme-accent : root.accents[root.i];
     out property <color> on-accent: root.has-custom-accent ? #ffffff : root.custom ? root.custom-on-accent : root.on-accents[root.i];
     out property <color> popover: root.custom ? root.custom-popover : root.popovers[root.i];
@@ -80,6 +85,27 @@ export global Theme {
     // Note titles and headings: the accent, deepened a little with the text colour so long
     // headings stay readable. Follows a custom accent too.
     out property <color> heading: root.accent.mix(root.ink, 0.8);
+    // Font for note titles and headings: a few themes bring their own, the rest use the note font.
+    out property <string> heading-font: root.custom ? root.font-face
+        : root.index == 10 ? root.face("Newsreader")
+        : root.index == 9 ? "JetBrains Mono"
+        : root.index == 8 ? "Literata"
+        : root.font-face;
+    // Cyberpunk's neon: a glow around accent-coloured marks (ticked boxes, the open-note bar).
+    out property <color> neon: root.custom || root.index != 9 ? transparent : root.accent.with-alpha(0.7);
+    // Soft coloured light in two corners of the window (top right, bottom left); clear for plain themes.
+    out property <color> glow-top: root.custom ? transparent
+        : root.index == 3 ? #d8b4fe2e
+        : root.index == 4 ? #12b5e52b
+        : root.index == 8 ? #f48fb140
+        : root.index == 9 ? #ff2a6d38
+        : root.index == 10 ? #d4af6a24
+        : transparent;
+    out property <color> glow-bottom: root.custom ? transparent
+        : root.index == 3 ? #7c5cff26
+        : root.index == 9 ? #05d9e82e
+        : root.index == 10 ? #b0283c33
+        : transparent;
     // How much of the window background shows through the notes list, so the theme's gradient
     // reaches the whole window instead of stopping at the sidebar.
     out property <float> sidebar-alpha: 0.55;
@@ -87,15 +113,15 @@ export global Theme {
 
     // Window background: Zima's gradients for its themes, plain paper otherwise.
     out property <brush> backdrop: root.custom ? root.custom-backdrop
-        : root.index == 3 ? @radial-gradient(circle, #2b2057 0%, #0d0c1d 75%)
-        : root.index == 4 ? @linear-gradient(180deg, #1a1a1f 0%, #1d2e35 100%)
+        : root.index == 3 ? @radial-gradient(circle, #34266b 0%, #0d0c1d 80%)
+        : root.index == 4 ? @linear-gradient(180deg, #17181d 0%, #12323d 100%)
         : root.index == 5 ? @linear-gradient(180deg, #12b5e5 0%, #0ea5e9 100%)
         // Sakura: blossom pink fading into paper.
-        : root.index == 8 ? @linear-gradient(180deg, #fbe4ec 0%, #fdf6f7 45%, #fdf6f7 100%)
+        : root.index == 8 ? @linear-gradient(180deg, #f9dbe6 0%, #fdf2f5 55%, #fdf6f7 100%)
         // Cyberpunk: violet dusk into teal neon.
-        : root.index == 9 ? @linear-gradient(160deg, #1d0b33 0%, #0d0b14 55%, #00202b 100%)
+        : root.index == 9 ? @linear-gradient(160deg, #2a0b4a 0%, #0d0b14 50%, #00303d 100%)
         // Expedition 33: night blue with a crimson, painterly glow below.
-        : root.index == 10 ? @linear-gradient(180deg, #181b28 0%, #13151d 55%, #2a141b 100%)
+        : root.index == 10 ? @linear-gradient(180deg, #1b1f2f 0%, #13151d 50%, #36141e 100%)
         : root.paper;
 
     out property <[ThemeInfo]> themes: [

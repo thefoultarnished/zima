@@ -62,7 +62,7 @@ component SectionHeader {
         Text {
             text: root.label;
             color: touch.has-hover || action-touch.has-hover ? Theme.ink-soft : Theme.muted;
-            font-size: 10.5px;
+            font-size: 11px;
             font-weight: 700;
             letter-spacing: 1.2px;
             vertical-alignment: center;
@@ -85,7 +85,7 @@ component SectionHeader {
                 action-text := Text {
                     text: root.action;
                     color: action-touch.has-hover && root.action-danger ? Theme.danger : action-touch.has-hover ? Theme.ink : Theme.ink-soft;
-                    font-size: 10.5px;
+                    font-size: 11px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -285,6 +285,8 @@ component NoteRowItem {
             height: min(16px, parent.height - 16px);
             border-radius: 1.5px;
             background: Theme.accent;
+            drop-shadow-blur: 6px;
+            drop-shadow-color: Theme.neon;
         }
 
         // Same left and right edges as the section headers, so titles, counts and times line up.
@@ -342,7 +344,7 @@ component NoteRowItem {
                 if root.note.progress != "": Text {
                     text: root.note.progress;
                     color: Theme.accent;
-                    font-size: 10.5px;
+                    font-size: 11px;
                     font-weight: 600;
                     vertical-alignment: center;
                 }
@@ -709,6 +711,32 @@ export component Sidebar inherits Rectangle {
                 spacing: 1px;
                 alignment: start;
 
+                // Pinned notes come first, above everything else.
+                if root.pinned-notes.length > 0: SectionHeader {
+                    label: "PINNED";
+                    count: root.pinned-notes.length;
+                    open: root.show-pinned;
+                    toggled => { root.toggle-section("pinned"); }
+                }
+                if root.show-pinned: VerticalLayout {
+                    spacing: 1px;
+                    for row in root.pinned-notes: NoteRowItem {
+                        note: row;
+                        open => { root.open-note(row.id); }
+                        favorite => { root.toggle-favorite(row.id); }
+                        remove => { root.delete-note(row.id); }
+                        pin => { root.toggle-pin(row.id); }
+                        archive => { root.toggle-archive(row.id); }
+                        duplicate => { root.duplicate-note(row.id); }
+                        sticky => { root.open-sticky(row.id); }
+                        set-color(c) => { root.set-color(row.id, c); }
+                        move-to-notebook => { root.move-to-notebook(row.id); }
+                        pick-emoji => { root.pick-emoji(row.id); }
+                        select => { root.select-note(row.id); }
+                        history => { root.open-history(row.id); }
+                    }
+                }
+
                 if root.active-notes.length > 0: SectionHeader {
                     label: "ACTIVE";
                     count: root.active-notes.length;
@@ -723,31 +751,6 @@ export component Sidebar inherits Rectangle {
                         open => { root.open-note(row.id); }
                         favorite => { root.toggle-favorite(row.id); }
                         remove => { root.close-note(row.id); }
-                        pin => { root.toggle-pin(row.id); }
-                        archive => { root.toggle-archive(row.id); }
-                        duplicate => { root.duplicate-note(row.id); }
-                        sticky => { root.open-sticky(row.id); }
-                        set-color(c) => { root.set-color(row.id, c); }
-                        move-to-notebook => { root.move-to-notebook(row.id); }
-                        pick-emoji => { root.pick-emoji(row.id); }
-                        select => { root.select-note(row.id); }
-                        history => { root.open-history(row.id); }
-                    }
-                }
-
-                if root.pinned-notes.length > 0: SectionHeader {
-                    label: "PINNED";
-                    count: root.pinned-notes.length;
-                    open: root.show-pinned;
-                    toggled => { root.toggle-section("pinned"); }
-                }
-                if root.show-pinned: VerticalLayout {
-                    spacing: 1px;
-                    for row in root.pinned-notes: NoteRowItem {
-                        note: row;
-                        open => { root.open-note(row.id); }
-                        favorite => { root.toggle-favorite(row.id); }
-                        remove => { root.delete-note(row.id); }
                         pin => { root.toggle-pin(row.id); }
                         archive => { root.toggle-archive(row.id); }
                         duplicate => { root.duplicate-note(row.id); }

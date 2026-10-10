@@ -8,13 +8,14 @@ export struct StatCell {
     label: string,
 }
 
+// Big counts come as text with thousands commas ("2,300"), made in Rust.
 export struct StatSummary {
-    today: int,
-    week: int,
+    today: string,
+    week: string,
     streak: int,
-    best: int,
+    best: string,
     notes: int,
-    words: int,
+    words: string,
     // Focus-timer minutes.
     focus-today: int,
     focus-week: int,
@@ -26,6 +27,8 @@ export component StatsPopover {
     // Weeks × 7 days, oldest first, Monday first within a week.
     in property <[StatCell]> cells;
     in property <int> weeks: 18;
+    // One per week: the month's short name on the first week that starts in it, else empty.
+    in property <[string]> months;
     callback close();
 
     property <string> hovered;
@@ -99,16 +102,40 @@ export component StatsPopover {
             }
         }
 
-        // Heatmap: columns are weeks, rows are days.
+        // Heatmap: columns are weeks, rows are days, with month names above and weekdays on the left.
         HorizontalLayout {
             spacing: 3px;
             alignment: center;
+
+            VerticalLayout {
+                spacing: 3px;
+                // Lines up with the month names above the squares.
+                Rectangle { height: 14px; }
+                for day[d] in ["Mon", "", "Wed", "", "Fri", "", ""]: Text {
+                    width: 28px;
+                    height: 20px;
+                    text: day;
+                    color: Theme.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+
             for week in root.weeks: VerticalLayout {
                 spacing: 3px;
+                Text {
+                    width: 20px;
+                    height: 14px;
+                    text: root.months[week];
+                    color: Theme.muted;
+                    font-size: 11px;
+                    overflow: clip;
+                    vertical-alignment: center;
+                }
                 for day in 7: Rectangle {
                     property <StatCell> cell: root.cells[week * 7 + day];
-                    width: 22px;
-                    height: 22px;
+                    width: 20px;
+                    height: 20px;
                     border-radius: 4px;
                     background: self.cell.level == 0 ? Theme.hover
                         : Theme.accent.with-alpha(0.2 + self.cell.level * 0.2);

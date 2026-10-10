@@ -405,20 +405,26 @@ pub fn parse(source: &str) -> Vec<Block> {
         }
     }
 
-    // Vertical rhythm: space above each block depends on what it follows.
     let mut previous: Option<Kind> = None;
     for block in &mut blocks {
-        block.space = match (previous, block.kind) {
-            (None, _) => 0,
-            (_, Kind::Heading) => 18,
-            (Some(Kind::Item | Kind::Task), Kind::Item | Kind::Task) => 3,
-            (Some(Kind::Row), Kind::Row) => 0,
-            (Some(Kind::Quote), Kind::Quote) => 4,
-            _ => 10,
-        };
+        block.space = space_above(previous, block.kind);
         previous = Some(block.kind);
     }
     blocks
+}
+
+/// Vertical rhythm: the space above a block (logical px) depends on what it follows. Headings get
+/// more room above than below, so each one sits with the text it introduces.
+fn space_above(previous: Option<Kind>, kind: Kind) -> u8 {
+    match (previous, kind) {
+        (None, _) => 0,
+        (_, Kind::Heading) => 24,
+        (Some(Kind::Heading), _) => 6,
+        (Some(Kind::Item | Kind::Task), Kind::Item | Kind::Task) => 3,
+        (Some(Kind::Row), Kind::Row) => 0,
+        (Some(Kind::Quote), Kind::Quote) => 4,
+        _ => 10,
+    }
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
@@ -722,6 +728,15 @@ mod tests {
         assert_eq!(marked("==red:=="), "<font color=\"#f00\">red:</font>");
         assert_eq!(marked("==time 10:30=="), "<font color=\"#f00\">time 10:30</font>");
         assert_eq!(plain_marks(&parse("==red:x==")[0].text), "==red:x==");
+    }
+
+    #[test]
+    fn headings_have_more_room_above_than_below() {
+        let space: Vec<u8> = parse("intro\n\n# Plan\n\nfirst\n\nsecond\n\n- a\n- b").iter().map(|b| b.space).collect();
+        assert_eq!(space, vec![0, 24, 6, 10, 10, 3]);
+        // A heading at the very top has no space above it, and two headings in a row keep theirs.
+        let space: Vec<u8> = parse("# A\n## B").iter().map(|b| b.space).collect();
+        assert_eq!(space, vec![0, 24]);
     }
 
     #[test]

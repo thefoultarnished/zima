@@ -116,7 +116,7 @@ export component TasksPopover {
                         y: 12px;
                         text: row.header.to-uppercase();
                         color: row.header == "Overdue" ? Theme.danger : Theme.muted;
-                        font-size: 10.5px;
+                        font-size: 11px;
                         font-weight: 700;
                         letter-spacing: 1.1px;
                     }
@@ -170,13 +170,27 @@ export component TasksPopover {
                                 }
                             }
 
-                            Text {
+                            Rectangle {
                                 horizontal-stretch: 1;
-                                text: row.text;
-                                overflow: elide;
-                                color: row.done ? Theme.muted : Theme.ink;
-                                font-size: 13.5px;
-                                vertical-alignment: center;
+
+                                task-text := Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: row.text;
+                                    overflow: elide;
+                                    color: row.done ? Theme.muted : Theme.ink;
+                                    font-size: 13.5px;
+                                    vertical-alignment: center;
+                                }
+
+                                // Done tasks are crossed out (Text has no strikethrough of its own).
+                                if row.done: Rectangle {
+                                    x: 0;
+                                    y: parent.height / 2;
+                                    width: min(task-text.preferred-width, parent.width);
+                                    height: 1px;
+                                    background: Theme.muted;
+                                }
                             }
 
                             if row.due != "": VerticalLayout {

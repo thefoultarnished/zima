@@ -1651,12 +1651,13 @@ impl App {
         };
         // Sorted by creation date, the times shown are creation times too.
         let by_created = self.state.note_order == 2;
-        let row = |n: &Note| NoteRow {
+        // `here`: this section is where the open note is highlighted (see below).
+        let row = |n: &Note, here: bool| NoteRow {
             id: n.id.to_string().into(),
             title: display_title(n).into(),
             meta: relative_time(if by_created && n.created > 0 { n.created } else { n.modified }).into(),
             favorite: n.favorite,
-            current: self.state.current == Some(n.id),
+            current: here && self.state.current == Some(n.id),
             dim: !matches(n),
             pinned: n.pinned,
             color: n.color.map_or(-1, |c| c as i32),
@@ -1668,7 +1669,9 @@ impl App {
 
         let mut listed: Vec<&Note> = self.notes.iter().filter(|n| n.is_listed()).collect();
         listed.sort_by_key(|n| Reverse(n.modified));
-        let recent: Vec<&Note> = listed.iter().copied().filter(|n| matches(n)).take(RECENT_COUNT).collect();
+        // Open notes are already in Active, so Recent shows the others.
+        let open = &self.state.open_ids;
+        let recent: Vec<&Note> = listed.iter().copied().filter(|n| matches(n) && !open.contains(&n.id)).take(RECENT_COUNT).collect();
         organize::sort_notes(&mut listed, self.state.note_order);
         let mut binned: Vec<&Note> = self.notes.iter().filter(|n| !n.is_live()).collect();
         binned.sort_by_key(|n| Reverse(n.deleted_at));
@@ -1676,21 +1679,34 @@ impl App {
         organize::sort_notes(&mut archived, self.state.note_order);
 
         // Active keeps every open note and fades non-matches (like Zima); other sections filter.
-        let active = self.state.open_ids.iter().filter_map(|&id| self.find(id)).map(row);
-        let pinned = listed.iter().copied().filter(|n| n.pinned && matches(n)).map(row);
-        let favorites = listed.iter().copied().filter(|n| n.favorite && matches(n)).map(row);
-        let recent = recent.into_iter().map(row);
-        let all = listed.iter().copied().filter(|n| matches(n)).map(row);
-        let bin = binned.iter().copied().filter(|n| matches(n)).map(row);
-        let archive = archived.iter().copied().filter(|n| matches(n)).map(row);
+        let active: Vec<&Note> = self.state.open_ids.iter().filter_map(|&id| self.find(id)).collect();
+        let pinned: Vec<&Note> = listed.iter().copied().filter(|n| n.pinned && matches(n)).collect();
+        let favorites: Vec<&Note> = listed.iter().copied().filter(|n| n.favorite && matches(n)).collect();
+        let all: Vec<&Note> = listed.iter().copied().filter(|n| matches(n)).collect();
+        let archive: Vec<&Note> = archived.iter().copied().filter(|n| matches(n)).collect();
+        let bin = binned.iter().copied().filter(|n| matches(n)).map(|n| row(n, true));
 
-        ui.set_active_notes(model(active));
-        ui.set_pinned_notes(model(pinned));
-        ui.set_favorite_notes(model(favorites));
-        ui.set_recent_notes(model(recent));
-        ui.set_all_notes(model(all));
+        // The open note is highlighted once, in the first open section that lists it (top to bottom).
+        let sections = &self.state.sections;
+        let shown = [
+            (sections.pinned, &pinned),
+            (sections.active, &active),
+            (sections.favorites, &favorites),
+            (sections.recent, &recent),
+            (sections.all, &all),
+            (sections.archive, &archive),
+        ]
+        .map(|(open, notes)| open && self.state.current.is_some_and(|c| notes.iter().any(|n| n.id == c)));
+        let highlight = highlight_section(&shown);
+        let rows = |notes: &[&Note], section: usize| model(notes.iter().map(|n| row(n, highlight == Some(section))));
+
+        ui.set_pinned_notes(rows(&pinned, 0));
+        ui.set_active_notes(rows(&active, 1));
+        ui.set_favorite_notes(rows(&favorites, 2));
+        ui.set_recent_notes(rows(&recent, 3));
+        ui.set_all_notes(rows(&all, 4));
+        ui.set_archived_notes(rows(&archive, 5));
         ui.set_bin_notes(model(bin));
-        ui.set_archived_notes(model(archive));
         ui.set_note_count(listed.len() as i32);
         ui.set_selected_count(self.selected.len() as i32);
         ui.set_word_count(listed.iter().map(|n| self.summary(n).words).sum::<usize>() as i32);
@@ -1778,7 +1794,11 @@ fn md_block(block: markdown::Block, ink: &Ink) -> MdBlock {
     };
     MdBlock {
         kind: block.kind.name().into(),
-        text: if block.kind == Kind::Code { StyledText::default() } else { styled(&block.text) },
+        text: match block.kind {
+            Kind::Code => StyledText::default(),
+            Kind::Task if block.checked => styled(&done_text(&block.text)),
+            _ => styled(&block.text),
+        },
         plain: if block.kind == Kind::Code { block.text.as_str().into() } else { Default::default() },
         level: block.level as i32,
         marker: block.marker.as_str().into(),
@@ -1838,6 +1858,17 @@ fn show_notification(title: &str, body: &str) {
             eprintln!("failed to show notification: {e}");
         }
     });
+}
+
+/// A ticked task's text, crossed out. Empty text stays empty: `~~~~` alone would start a code block.
+fn done_text(text: &str) -> String {
+    if text.trim().is_empty() { text.to_string() } else { format!("~~{text}~~") }
+}
+
+/// Which sidebar section highlights the open note: the first one (top to bottom) that is open
+/// and lists it, so it isn't highlighted three times over.
+fn highlight_section(open_and_listed: &[bool]) -> Option<usize> {
+    open_and_listed.iter().position(|&shown| shown)
 }
 
 /// `text` with its line breaks turned into spaces, or `None` if it has none.
@@ -2197,6 +2228,25 @@ fn retry_mica(app: rc::Weak<RefCell<App>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn done_tasks_are_crossed_out() {
+        assert_eq!(done_text("Pack the camera"), "~~Pack the camera~~");
+        assert_eq!(done_text("a **b**"), "~~a **b**~~");
+        assert_eq!(done_text(""), "");
+        assert_eq!(done_text("  "), "  ");
+    }
+
+    #[test]
+    fn open_note_is_highlighted_once() {
+        // Pinned (collapsed or not listing it) is skipped; Active wins over Recent and All notes.
+        assert_eq!(highlight_section(&[false, true, false, false, true, false]), Some(1));
+        assert_eq!(highlight_section(&[true, true, false, false, true, false]), Some(0));
+        // Only in All notes (Active collapsed).
+        assert_eq!(highlight_section(&[false, false, false, false, true, false]), Some(4));
+        assert_eq!(highlight_section(&[false; 6]), None);
+        assert_eq!(highlight_section(&[]), None);
+    }
 
     #[test]
     fn titles_stay_on_one_line() {

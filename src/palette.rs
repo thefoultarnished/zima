@@ -45,6 +45,39 @@ pub struct Command {
     pub shortcut: &'static str,
 }
 
+/// The icon a command shows in the quick switcher: a name the switcher turns into an `Icons` path
+/// (`icon-for` in `ui/palette.slint`). Unknown or empty names show a small arrow.
+pub fn icon(id: &str) -> &'static str {
+    match id {
+        "new-note" | "duplicate" => "plus",
+        "palette" | "find" | "save-search" | "lookup" => "search",
+        "replace" => "replace",
+        "close-note" | "quit" => "close",
+        "reopen" | "history" => "restore",
+        "bold" | "italic" | "underline" | "format-bar" => "type",
+        "shortcuts" => "keyboard",
+        "outline" | "sort-changed" | "sort-title" => "bullets",
+        "sort-created" => "numbers",
+        "mode-edit" | "sticky" | "daily" | "emoji" => "edit",
+        "mode-split" | "cycle-view" | "wide" | "width-note-default" | "width-note-wide" | "width-note-normal" => "split",
+        "mode-preview" | "zen" | "present" | "on-this-day" | "random" => "eye",
+        "sidebar" => "sidebar",
+        "pin" | "favorite" => "star",
+        "archive" | "notebook" | "open-folder" | "google-drive" | "sync-folder" | "open-backups" => "folder",
+        "merge" | "import" | "import-folder" => "import",
+        "delete" | "empty-bin" => "trash",
+        "timer" => "timer",
+        "timer-stop" => "stop",
+        "reminders" | "calendar" => "bell",
+        "tasks" => "task",
+        "spell" => "check",
+        "settings" | "edit-theme" | "font-note-default" => "settings",
+        "export" | "export-html" | "export-all" | "backup" | "print" | "share-image" => "export",
+        id if id.starts_with("theme-") => "settings",
+        _ => "",
+    }
+}
+
 pub const COMMANDS: &[Command] = &[
     Command { id: "new-note", title: "New note", shortcut: "Ctrl+N" },
     Command { id: "palette", title: "Quick switcher", shortcut: "Ctrl+K" },
@@ -132,6 +165,16 @@ pub const COMMANDS: &[Command] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_have_icons() {
+        assert_eq!(icon("new-note"), "plus");
+        assert_eq!(icon("theme-9"), "settings");
+        assert_eq!(icon("not-a-command"), "");
+        // Most commands get a real icon, not the plain arrow.
+        let with_icon = COMMANDS.iter().filter(|c| !icon(c.id).is_empty()).count();
+        assert!(with_icon * 10 >= COMMANDS.len() * 9, "{with_icon} of {}", COMMANDS.len());
+    }
 
     #[test]
     fn matching() {

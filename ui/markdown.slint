@@ -27,7 +27,7 @@ export struct LinkPreview {
 }
 
 component Rich inherits StyledText {
-    default-font-family: Theme.font;
+    default-font-family: Theme.font-face;
     default-font-size: 16px * Theme.text-scale;
     default-color: Theme.ink;
     link-color: Theme.accent;
@@ -57,7 +57,9 @@ export component BlockView {
             if root.block.kind == "heading": Rich {
                 text: root.block.text;
                 default-color: Theme.heading;
-                default-font-size: (root.block.level == 1 ? 26px : root.block.level == 2 ? 21px : root.block.level == 3 ? 18px : 16px) * Theme.text-scale;
+                default-font-family: Theme.heading-font;
+                // A clear step below the note title (28 px), so a first heading doesn't read as a second title.
+                default-font-size: (root.block.level == 1 ? 22px : root.block.level == 2 ? 19px : root.block.level == 3 ? 17px : 16px) * Theme.text-scale;
                 link-clicked(url) => { root.link-clicked(url); }
             }
 
@@ -87,7 +89,7 @@ export component BlockView {
                     width: 18px;
                     text: root.block.marker;
                     color: Theme.muted;
-                    font-family: Theme.font;
+                    font-family: Theme.font-face;
                     font-size: 16px;
                     horizontal-alignment: right;
                 }
@@ -108,6 +110,8 @@ export component BlockView {
                         height: 16px;
                         border-radius: 4px;
                         background: root.block.checked ? Theme.accent : box-touch.has-hover ? Theme.hover : transparent;
+                        drop-shadow-blur: root.block.checked ? 8px : 0px;
+                        drop-shadow-color: Theme.neon;
                         border-width: root.block.checked ? 0 : 1.5px;
                         border-color: Theme.muted;
                         animate background { duration: 120ms; }
@@ -205,10 +209,10 @@ export component BlockView {
                 }
             }
 
+            // One thin line under each row and a tinted header row, instead of a box around every cell.
             if root.block.kind == "row": Rectangle {
                 background: root.block.level == 1 ? Theme.hover : transparent;
-                border-width: 1px;
-                border-color: Theme.rule;
+                border-radius: root.block.level == 1 ? 6px : 0px;
 
                 HorizontalLayout {
                     for cell in root.block.cells: Rectangle {
@@ -216,8 +220,6 @@ export component BlockView {
                         horizontal-stretch: 1;
                         min-width: 0px;
                         preferred-width: 0px;
-                        border-width: 0.5px;
-                        border-color: Theme.rule;
                         HorizontalLayout {
                             padding: 8px;
                             Rich {
@@ -227,6 +229,12 @@ export component BlockView {
                             }
                         }
                     }
+                }
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.rule;
                 }
             }
         }

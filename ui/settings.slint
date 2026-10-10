@@ -5,7 +5,7 @@ import { ShortcutsEditor, ShortcutRow } from "shortcuts.slint";
 
 component SectionLabel inherits Text {
     color: Theme.muted;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 1.1px;
 }
@@ -304,14 +304,14 @@ component FontPicker {
                 alignment: center;
                 Text {
                     text: "Aa";
-                    font-family: font;
+                    font-family: Theme.face(font);
                     font-size: 14px;
                     color: Theme.ink;
                     horizontal-alignment: center;
                 }
                 Text {
                     text: Theme.font-labels[i];
-                    font-size: 9.5px;
+                    font-size: 11px;
                     color: Theme.muted;
                     horizontal-alignment: center;
                     overflow: elide;

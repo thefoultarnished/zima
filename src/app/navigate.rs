@@ -72,6 +72,7 @@ impl App {
             kind: kind.into(),
             shortcut: shortcut.into(),
             emoji: Default::default(),
+            icon: Default::default(),
         };
         let note_emoji = |note: &crate::model::Note| -> slint::SharedString { note.emoji.as_deref().and_then(crate::emoji::clean).unwrap_or_default().into() };
 
@@ -98,7 +99,8 @@ impl App {
                 if !query.is_empty() {
                     for command in palette::COMMANDS {
                         if let Some(score) = fuzzy_score(&query, command.title) {
-                            scored.push((score + 10, PaletteEntry::Command(command.id), item(command.title.into(), String::new(), "command", command.shortcut)));
+                            let entry = PaletteItem { icon: palette::icon(command.id).into(), ..item(command.title.into(), String::new(), "command", command.shortcut) };
+                            scored.push((score + 10, PaletteEntry::Command(command.id), entry));
                         }
                     }
                 }

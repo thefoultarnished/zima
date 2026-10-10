@@ -9,6 +9,8 @@ export struct PaletteItem {
     shortcut: string,
     // A note's emoji; shown instead of the icon when set.
     emoji: string,
+    // For commands: which icon (a name from `Icons`, see `icon-for`); empty for the default.
+    icon: string,
 }
 
 // Quick switcher (Ctrl+K): type to find notes and commands.
@@ -21,6 +23,36 @@ export component QuickSwitcher {
     callback query(string);
     callback run(int);
     callback close();
+
+    // A command's icon by name (set in Rust, `palette::icon`).
+    pure function icon-for(name: string) -> string {
+        return name == "plus" ? Icons.plus
+            : name == "close" ? Icons.close
+            : name == "star" ? Icons.star
+            : name == "trash" ? Icons.trash
+            : name == "restore" ? Icons.restore
+            : name == "sidebar" ? Icons.sidebar
+            : name == "search" ? Icons.search
+            : name == "replace" ? Icons.replace
+            : name == "timer" ? Icons.timer
+            : name == "stop" ? Icons.stop
+            : name == "bell" ? Icons.bell
+            : name == "settings" ? Icons.settings
+            : name == "edit" ? Icons.edit
+            : name == "split" ? Icons.split
+            : name == "eye" ? Icons.eye
+            : name == "type" ? Icons.type
+            : name == "bullets" ? Icons.bullets
+            : name == "numbers" ? Icons.numbers
+            : name == "task" ? Icons.task
+            : name == "quote" ? Icons.quote
+            : name == "keyboard" ? Icons.keyboard
+            : name == "folder" ? Icons.folder
+            : name == "export" ? Icons.export
+            : name == "import" ? Icons.import
+            : name == "check" ? Icons.check
+            : Icons.chevron-right;
+    }
 
     public function focus-input() {
         input.text = "";
@@ -75,6 +107,7 @@ export component QuickSwitcher {
 
                 // The switcher sits outside the app's key handler, so it handles its own keys.
                 FocusScope {
+                    horizontal-stretch: 1;
                     focus-on-click: false;
                     capture-key-pressed(event) => {
                         if (event.text == Key.UpArrow) {
@@ -114,11 +147,22 @@ export component QuickSwitcher {
                     }
                 }
 
-                Text {
-                    text: "Esc";
-                    color: Theme.muted;
-                    font-size: 11px;
-                    vertical-alignment: center;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: esc.preferred-width + 12px;
+                        height: 20px;
+                        border-radius: 5px;
+                        border-width: 1px;
+                        border-color: Theme.rule;
+                        esc := Text {
+                            text: "Esc";
+                            color: Theme.muted;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
 
@@ -164,7 +208,7 @@ export component QuickSwitcher {
                             if entry.item.emoji == "": Icon {
                                 width: 14px;
                                 height: 14px;
-                                commands: entry.item.kind == "command" ? Icons.chevron-right
+                                commands: entry.item.kind == "command" ? root.icon-for(entry.item.icon)
                                     : entry.item.kind == "heading" ? Icons.quote : Icons.edit;
                                 stroke: Theme.muted;
                             }
