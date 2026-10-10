@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
-use slint::{Color, ComponentHandle, Timer, TimerMode};
+use slint::{Color, ComponentHandle, TimerMode};
 
 use super::{App, parse_hex_color};
 use crate::{Theme, system};
@@ -75,8 +75,12 @@ impl App {
         let Some(ui) = self.ui.upgrade() else { return };
         let theme = ui.global::<Theme>();
         if self.state.theme != CUSTOM {
+            self.theme_watch.stop();
             theme.set_custom(false);
             return;
+        }
+        if !self.theme_watch.running() {
+            self.watch_custom_theme();
         }
         match self.load_custom_theme() {
             Ok(custom) => self.custom_theme = custom,
@@ -103,23 +107,20 @@ impl App {
         self.toast("Edit theme.json and save; Zima updates as you go", false);
     }
 
-    /// Re-apply the Custom theme whenever theme.json changes.
-    pub fn watch_custom_theme(&mut self) {
+    /// Re-apply the Custom theme whenever theme.json changes. Runs only while the Custom theme is
+    /// on, so other themes don't check the file every second.
+    fn watch_custom_theme(&mut self) {
         self.custom_theme_modified = modified(&self.theme_path());
         let app = self.this.clone();
-        let timer = Timer::default();
-        timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+        self.theme_watch.start(TimerMode::Repeated, Duration::from_secs(1), move || {
             let Some(app) = app.upgrade() else { return };
             let Ok(mut app) = app.try_borrow_mut() else { return };
             let now = modified(&app.theme_path());
             if now != app.custom_theme_modified {
                 app.custom_theme_modified = now;
-                if app.state.theme == CUSTOM {
-                    app.apply_appearance();
-                }
+                app.apply_appearance();
             }
         });
-        std::mem::forget(timer);
     }
 }
 

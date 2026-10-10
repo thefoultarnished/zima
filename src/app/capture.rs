@@ -1,16 +1,23 @@
 //! Global quick capture: Ctrl+Alt+N from any app opens a small box to jot a note or an @remind.
 
+use std::cell::RefCell;
+use std::rc::Weak;
 use std::time::Duration;
 
 use chrono::Local;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{ComponentHandle, Timer};
 use slint::winit_030::WinitWindowAccessor;
 
 use super::{App, show_notification, with_app};
 use crate::model::{Note, now_ms};
 use crate::{CaptureWindow, Theme, reminders};
+
+thread_local! {
+    /// The app, for Ctrl+Alt+N presses arriving through the event loop (`App` can't cross threads).
+    static CAPTURE_APP: RefCell<Weak<RefCell<App>>> = RefCell::new(Weak::new());
+}
 
 impl App {
     /// Register Ctrl+Alt+N. The manager must stay alive, so the app keeps it.
@@ -29,19 +36,18 @@ impl App {
         }
         self.hotkeys = Some(manager);
 
-        // Hotkey events arrive on a channel; check it from the UI thread.
-        let app = self.this.clone();
-        let poll = Timer::default();
-        poll.start(TimerMode::Repeated, Duration::from_millis(100), move || {
-            while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                if event.state == HotKeyState::Pressed {
-                    if let Some(app) = app.upgrade() {
+        // Windows tells the hotkey library on this thread; hand the press to the event loop
+        // instead of checking for it on a timer, so an idle Zima can sleep.
+        CAPTURE_APP.with(|cell| *cell.borrow_mut() = self.this.clone());
+        GlobalHotKeyEvent::set_event_handler(Some(|event: GlobalHotKeyEvent| {
+            if event.state == HotKeyState::Pressed {
+                let _ = slint::invoke_from_event_loop(|| {
+                    if let Some(app) = CAPTURE_APP.with(|cell| cell.borrow().upgrade()) {
                         with_app(&app, |a| a.show_capture());
                     }
-                }
+                });
             }
-        });
-        std::mem::forget(poll);
+        }));
     }
 
     pub fn show_capture(&mut self) {

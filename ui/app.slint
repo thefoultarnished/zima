@@ -447,6 +447,12 @@ export component AppWindow inherits Window {
         root.set-view-mode(mode);
     }
 
+    // Light/dark can change after start ("System" theme follows Windows); Rust re-draws the
+    // preview's code colours and the Mica backdrop.
+    callback dark-changed();
+    property <bool> theme-dark: Theme.dark;
+    changed theme-dark => { root.dark-changed(); }
+
     // The text field is hidden in preview; keep keyboard focus so shortcuts still work.
     changed view-mode => {
         if (root.view-mode == 2) {

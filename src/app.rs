@@ -32,6 +32,7 @@ use std::time::Duration;
 
 use chrono::{Local, TimeZone};
 use slint::{ComponentHandle, Model, ModelRc, StyledText, Timer, TimerMode, VecModel, Weak};
+use slint::winit_030::WinitWindowAccessor;
 
 use crate::markdown::{self, Kind};
 use crate::model::{Note, NoteId, Reminder, UiState, now_ms};
@@ -107,6 +108,10 @@ pub struct App {
     /// What each of the toast's buttons does.
     toast_actions: Vec<ToastAction>,
     timer: Option<FocusTimer>,
+    /// Ticks once a second, only while a focus timer runs.
+    timer_tick: Timer,
+    /// Watches theme.json, only while the Custom theme is on.
+    theme_watch: Timer,
     /// Undo/redo for edits made from Rust (formatting, commands), which the text field can't undo itself.
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
@@ -137,6 +142,10 @@ pub struct App {
     word_base: usize,
     /// What the lists need from each note's text, kept until the note changes.
     summaries: RefCell<summary::Summaries>,
+    /// The sidebar lists missed a minute's update while the window was hidden.
+    lists_stale: std::cell::Cell<bool>,
+    /// The day the sidebar's times were last brought up to date.
+    times_day: chrono::NaiveDate,
     /// When each note's newest history copy was made (or found on disk), so copies are kept only every few minutes.
     last_copy: std::collections::HashMap<NoteId, i64>,
     /// The history panel's copies of the open note (unix ms, newest first).
@@ -218,6 +227,8 @@ impl App {
             find_index: 0,
             toast_actions: Vec::new(),
             timer: None,
+            timer_tick: Timer::default(),
+            theme_watch: Timer::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             palette_mode: PaletteMode::All,
@@ -236,6 +247,8 @@ impl App {
             pause_timer: Timer::default(),
             word_base: 0,
             summaries: Default::default(),
+            lists_stale: Default::default(),
+            times_day: Local::now().date_naive(),
             last_copy: Default::default(),
             versions: Vec::new(),
             toast_timer: Timer::default(),
@@ -297,7 +310,6 @@ impl App {
         this.restore_stickies();
         this.register_capture_hotkey();
         this.watch_for_external_changes();
-        this.watch_custom_theme();
         this.refresh_sync_ui();
         this.refresh_reminders();
         // Anything that came due while the app was closed.
@@ -808,6 +820,14 @@ impl App {
 
     pub fn start_timer(&mut self, minutes: u32, is_break: bool) {
         self.timer = Some(FocusTimer { ends: now_ms() + minutes as i64 * 60_000, minutes, is_break });
+        let app = self.this.clone();
+        self.timer_tick.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+            if let Some(app) = app.upgrade() {
+                if let Ok(mut app) = app.try_borrow_mut() {
+                    app.tick_timer();
+                }
+            }
+        });
         self.tick_timer();
         let label = if is_break { "Break" } else { "Focus" };
         self.toast(&format!("{label} timer: {minutes} min"), false);
@@ -818,10 +838,11 @@ impl App {
         self.tick_timer();
     }
 
-    /// Called every second.
-    pub fn tick_timer(&mut self) {
+    /// Called every second while a timer runs.
+    fn tick_timer(&mut self) {
         let Some(ui) = self.ui.upgrade() else { return };
         let Some(timer) = &self.timer else {
+            self.timer_tick.stop();
             ui.set_timer_text("".into());
             return;
         };
@@ -831,6 +852,7 @@ impl App {
         if left == 0 {
             let (minutes, is_break) = (timer.minutes, timer.is_break);
             self.timer = None;
+            self.timer_tick.stop();
             ui.set_timer_text("".into());
             if is_break {
                 show_notification("Break's over", "Ready for another focus session?");
@@ -1657,6 +1679,7 @@ impl App {
     /// Rebuild every sidebar section.
     pub fn refresh_lists(&self) {
         let Some(ui) = self.ui.upgrade() else { return };
+        self.lists_stale.set(false);
         // Words plus filters: #tag, notebook:, created:, modified:, has:, is: (see search.rs).
         let search = crate::search::parse(&self.search, Local::now().date_naive());
         let query = search.text();
@@ -1673,13 +1696,11 @@ impl App {
                 .map(|l| l.trim().chars().take(80).collect())
                 .unwrap_or_default()
         };
-        // Sorted by creation date, the times shown are creation times too.
-        let by_created = self.state.note_order == 2;
         // `here`: this section is where the open note is highlighted (see below).
         let row = |n: &Note, here: bool| NoteRow {
             id: n.id.to_string().into(),
             title: display_title(n).into(),
-            meta: relative_time(if by_created && n.created > 0 { n.created } else { n.modified }).into(),
+            meta: self.row_time(n).into(),
             favorite: n.favorite,
             current: here && self.state.current == Some(n.id),
             dim: !matches(n),
@@ -1740,6 +1761,49 @@ impl App {
         self.refresh_finding();
         self.refresh_tags();
     }
+
+    /// A sidebar row's time. Sorted by creation date, the times shown are creation times too.
+    fn row_time(&self, n: &Note) -> String {
+        let by_created = self.state.note_order == 2;
+        relative_time(if by_created && n.created > 0 { n.created } else { n.modified })
+    }
+
+    /// Every minute: keep times like "5m" fresh by changing just that text on the rows already
+    /// there. Nothing is drawn while the window is hidden or minimised, so then the lists wait to
+    /// be rebuilt until it's back. A new day rebuilds them (date searches, due dates).
+    fn refresh_times(&mut self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        if !ui.window().is_visible() || ui.window().is_minimized() {
+            self.lists_stale.set(true);
+            return;
+        }
+        let today = Local::now().date_naive();
+        if self.lists_stale.get() || self.times_day != today {
+            self.times_day = today;
+            self.refresh_lists();
+            return;
+        }
+        let time = |id: &str| parse_id(id).and_then(|id| self.find(id)).map(|n| self.row_time(n));
+        for rows in [
+            ui.get_pinned_notes(),
+            ui.get_active_notes(),
+            ui.get_favorite_notes(),
+            ui.get_recent_notes(),
+            ui.get_all_notes(),
+            ui.get_archived_notes(),
+            ui.get_bin_notes(),
+        ] {
+            retime_rows(&rows, time);
+        }
+    }
+
+    /// The window is back in front: catch up on the minute updates it missed.
+    fn window_focused(&mut self) {
+        if self.lists_stale.get() {
+            self.times_day = Local::now().date_naive();
+            self.refresh_lists();
+        }
+    }
 }
 
 /// A saved cursor spot that still fits the note: within the text and not inside a character.
@@ -1758,6 +1822,17 @@ fn retitle_rows(rows: &ModelRc<NoteRow>, id: NoteId, title: &str) {
     for i in 0..rows.row_count() {
         if let Some(mut row) = rows.row_data(i).filter(|r| r.id == id.as_str() && r.title != title) {
             row.title = title.into();
+            rows.set_row_data(i, row);
+        }
+    }
+}
+
+/// Give each row in a sidebar list its note's current time, leaving rows that are already right alone.
+fn retime_rows(rows: &ModelRc<NoteRow>, time: impl Fn(&str) -> Option<String>) {
+    for i in 0..rows.row_count() {
+        let Some(mut row) = rows.row_data(i) else { continue };
+        if let Some(meta) = time(&row.id).filter(|meta| row.meta != meta.as_str()) {
+            row.meta = meta.into();
             rows.set_row_data(i, row);
         }
     }
@@ -2097,18 +2172,6 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     on!(on_reset_shortcut, |a, id| a.reset_shortcut(&id));
     on!(on_shortcut_filter_edited, |a, text| a.filter_shortcuts(text.into()));
 
-    let timer_tick = Timer::default();
-    timer_tick.start(TimerMode::Repeated, Duration::from_secs(1), {
-        let app = Rc::downgrade(app);
-        move || {
-            if let Some(app) = app.upgrade() {
-                if let Ok(mut app) = app.try_borrow_mut() {
-                    app.tick_timer();
-                }
-            }
-        }
-    });
-    std::mem::forget(timer_tick);
     on!(on_import_zima, |a| a.import_zima());
     on!(on_open_notes_folder, |a| a.open_notes_folder());
     on!(on_open_backups_folder, |a| a.open_backups_folder());
@@ -2154,29 +2217,38 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
         });
     }
 
-    // Mica can only be applied once the native window exists.
+    // Mica and the interface size can only be applied once the native window exists.
     retry_mica(Rc::downgrade(app));
 
-    // "System" theme: Windows reports light/dark only once the window is up, so re-render then
-    // (and whenever it changes).
+    // Light/dark can flip once the window is up ("System" theme) or whenever Windows switches.
+    on!(on_dark_changed, |a| {
+        a.refresh_preview();
+        if let Some(ui) = a.ui.upgrade() {
+            window::apply_mica(&ui, ui.global::<Theme>().get_dark());
+        }
+    });
+
+    // Moving to a monitor with different Windows scaling resets the interface size; re-apply it
+    // once Slint has handled the change. The window coming back from the tray catches up the lists.
     {
-        let app_weak = Rc::downgrade(app);
-        let last_dark = std::cell::Cell::new(None::<bool>);
-        let watch = Timer::default();
-        watch.start(TimerMode::Repeated, Duration::from_millis(500), move || {
-            let Some(app) = app_weak.upgrade() else { return };
-            let Ok(app) = app.try_borrow() else { return };
-            let Some(ui) = app.ui.upgrade() else { return };
-            let dark = ui.global::<Theme>().get_dark();
-            if last_dark.replace(Some(dark)) != Some(dark) {
-                app.refresh_preview();
-                window::apply_mica(&ui, dark);
+        use slint::winit_030::winit::event::WindowEvent;
+        let app = Rc::downgrade(app);
+        ui.window().on_winit_window_event(move |_, event| {
+            let action: Option<fn(&mut App)> = match event {
+                WindowEvent::ScaleFactorChanged { .. } => Some(|a| a.apply_ui_scale()),
+                WindowEvent::Focused(true) => Some(App::window_focused),
+                _ => None,
+            };
+            if let Some(action) = action {
+                let app = app.clone();
+                Timer::single_shot(Duration::ZERO, move || {
+                    if let Some(app) = app.upgrade() {
+                        with_app(&app, action);
+                    }
+                });
             }
-            // The window only exists after startup, and moving to a monitor with different
-            // Windows scaling resets the interface size, so keep re-applying it (a no-op when unchanged).
-            app.apply_ui_scale();
+            slint::winit_030::EventResult::Propagate
         });
-        std::mem::forget(watch);
     }
 
     let check = Timer::default();
@@ -2190,19 +2262,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     });
     std::mem::forget(check); // lives for the whole app
 
-    // Clock in the title bar.
-    let update_clock = {
-        let ui = ui.as_weak();
-        move || {
-            if let Some(ui) = ui.upgrade() {
-                ui.set_clock(Local::now().format("%a %-d %b  \u{00b7}  %-I:%M %p").to_string().into());
-            }
-        }
-    };
-    update_clock();
-    let clock = Timer::default();
-    clock.start(TimerMode::Repeated, Duration::from_secs(5), update_clock);
-    std::mem::forget(clock);
+    tick_clock(ui.as_weak());
 
     // Keep relative times ("5m", "Yesterday", "Today 5:00 PM") fresh.
     let tick = Timer::default();
@@ -2211,7 +2271,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
         move || {
             if let Some(app) = app.upgrade() {
                 let Ok(mut app) = app.try_borrow_mut() else { return };
-                app.refresh_lists();
+                app.refresh_times();
                 app.refresh_reminders();
                 app.auto_backup();
                 // Also catches the window's spot if Zima is ended without quitting (Windows shutting down).
@@ -2249,11 +2309,26 @@ fn with_app(app: &Rc<RefCell<App>>, f: impl FnOnce(&mut App) + 'static) {
     }
 }
 
+/// Clock in the title bar. It shows minutes only, so it wakes once a minute, just after the minute turns.
+fn tick_clock(ui: Weak<AppWindow>) {
+    let Some(window) = ui.upgrade() else { return };
+    window.set_clock(Local::now().format("%a %-d %b  \u{00b7}  %-I:%M %p").to_string().into());
+    Timer::single_shot(until_next_minute(now_ms()), move || tick_clock(ui));
+}
+
+/// Time from `now` (unix ms) to the start of the next minute; a full minute when exactly on one.
+fn until_next_minute(now: i64) -> Duration {
+    Duration::from_millis((60_000 - now.rem_euclid(60_000)) as u64)
+}
+
 fn retry_mica(app: rc::Weak<RefCell<App>>) {
     Timer::single_shot(Duration::from_millis(100), move || {
         let Some(strong) = app.upgrade() else { return };
         let Some(ui) = strong.borrow().ui.upgrade() else { return };
-        if !window::apply_mica(&ui, ui.global::<Theme>().get_dark()) {
+        if window::apply_mica(&ui, ui.global::<Theme>().get_dark()) {
+            // The interface size also needs the native window.
+            strong.borrow().apply_ui_scale();
+        } else {
             retry_mica(app);
         }
     });
@@ -2262,6 +2337,39 @@ fn retry_mica(app: rc::Weak<RefCell<App>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn note_row(id: &str, meta: &str) -> NoteRow {
+        NoteRow { id: id.into(), meta: meta.into(), title: "t".into(), ..Default::default() }
+    }
+
+    #[test]
+    fn retime_changes_only_stale_times() {
+        let rows = model([note_row("1", "4m"), note_row("2", "9:05 AM"), note_row("3", "1m")].into_iter());
+        let time = |id: &str| match id {
+            "1" => Some("5m".to_string()),
+            "2" => Some("9:05 AM".to_string()),
+            _ => None, // a row whose note is gone keeps its text
+        };
+        retime_rows(&rows, time);
+        let metas: Vec<String> = rows.iter().map(|r| r.meta.to_string()).collect();
+        assert_eq!(metas, ["5m", "9:05 AM", "1m"]);
+        // Everything else on the row stays as it was.
+        assert_eq!(rows.row_data(0).unwrap().title, "t");
+        // An empty list is fine.
+        retime_rows(&model(std::iter::empty()), time);
+    }
+
+    #[test]
+    fn clock_waits_for_the_next_minute() {
+        assert_eq!(until_next_minute(30_500), Duration::from_millis(29_500));
+        assert_eq!(until_next_minute(1_760_000_099_999), Duration::from_millis(1));
+        // Exactly on the minute: wait a whole minute, never zero (which would spin).
+        assert_eq!(until_next_minute(0), Duration::from_secs(60));
+        assert_eq!(until_next_minute(1_760_000_040_000), Duration::from_secs(60));
+        // Before 1970 still lands on a minute boundary.
+        assert_eq!(until_next_minute(-1), Duration::from_millis(1));
+        assert_eq!(until_next_minute(-60_000), Duration::from_secs(60));
+    }
 
     #[test]
     fn removed_auto_theme_becomes_system() {
