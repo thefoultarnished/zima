@@ -79,6 +79,20 @@ pub fn segment_at(segs: &[Segment], offset: usize) -> usize {
 }
 
 /// The union of all segments touching the range between `a` and `b`.
+/// The part of the note to show raw for a selection: the segments it touches, except that a cursor
+/// on a blank line after a block's text gets only the lines from there on, so the finished block
+/// above shows styled while a new one is started.
+pub fn focus_range(body: &str, segs: &[Segment], anchor: usize, cursor: usize) -> Range<usize> {
+    if anchor == cursor && cursor <= body.len() && body.is_char_boundary(cursor) {
+        let seg = &segs[segment_at(segs, cursor)];
+        if !seg.blocks.is_empty() && cursor > seg.content_end {
+            let line_start = body[..cursor].rfind('\n').map_or(0, |i| i + 1).max(seg.content_end);
+            return line_start..seg.end;
+        }
+    }
+    cover(segs, anchor, cursor)
+}
+
 pub fn cover(segs: &[Segment], a: usize, b: usize) -> Range<usize> {
     let i = segment_at(segs, a.min(b));
     let j = segment_at(segs, a.max(b));
@@ -176,7 +190,10 @@ pub fn layout(body: &str, blocks: &[Block], active: Range<usize>) -> (Vec<Row>, 
         } else if seg.start >= active.end {
             push_rows(body, &seg, &mut after);
         } else {
-            if seg.start < active.start {
+            // Only the blank lines after the block's text are raw: the block itself still shows styled.
+            if seg.start < active.start && active.start >= seg.content_end && !seg.blocks.is_empty() {
+                push_rows(body, &seg, &mut before);
+            } else if seg.start < active.start {
                 push_raw(body, seg.start..active.start, &mut before);
             }
             if seg.end > active.end {
@@ -595,7 +612,9 @@ mod tests {
                         parts
                     };
                     let whole_outside = seg.end <= active.start || seg.start >= active.end;
-                    if whole_outside && !seg.blocks.is_empty() {
+                    // Raw part only in the blank lines after the block's text: the block shows styled.
+                    let text_outside = seg.start < active.start && active.start >= seg.content_end && seg.end <= active.end;
+                    if (whole_outside || text_outside) && !seg.blocks.is_empty() {
                         for &i in &seg.blocks {
                             assert!(rows.contains(&&Row::Block(i)), "block {i} missing: {body:?} {active:?}");
                         }
@@ -609,6 +628,75 @@ mod tests {
                             rows.iter().any(|r| matches!(r, Row::Raw(r) if r.start <= part.start && part.end <= r.end)),
                             "text {part:?} not shown: {body:?} {active:?}"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_blank_line_after_a_paragraph_is_raw_on_its_own() {
+        let body = "hey you\n**what do u want**\n\n";
+        let blocks = parse(body);
+        let segs = segments(body, &blocks);
+        // Cursor on the empty line after the paragraph: only that line is raw, the paragraph is styled.
+        let active = focus_range(body, &segs, body.len(), body.len());
+        assert_eq!(active, body.len()..body.len());
+        // One line up (the blank line itself, cursor after the paragraph's newline) works the same way.
+        assert_eq!(focus_range(body, &segs, body.len() - 1, body.len() - 1), body.len() - 1..body.len());
+        let (before, after) = layout(body, &blocks, active.clone());
+        assert_eq!(before, vec![Row::Block(0)]);
+        assert!(after.is_empty());
+        // Typing a new paragraph there keeps the old one styled.
+        let (typed, active, _) = apply_typed(body, active, "dwa", 0).unwrap();
+        assert_eq!(typed, "hey you\n**what do u want**\n\ndwa");
+        assert_eq!(&typed[active], "dwa");
+    }
+
+    #[test]
+    fn cursor_in_the_text_keeps_the_whole_block_raw() {
+        let body = "first para\n\nsecond para\n";
+        let segs = segments(body, &parse(body));
+        // At the end of the text (not on a blank line), the paragraph itself is raw.
+        assert_eq!(focus_range(body, &segs, 10, 10), cover(&segs, 10, 10));
+        assert_eq!(focus_range(body, &segs, 3, 3), cover(&segs, 3, 3));
+        // A selection always takes whole segments.
+        assert_eq!(focus_range(body, &segs, 11, 11), 11..12);
+        assert_eq!(focus_range(body, &segs, 0, 15), cover(&segs, 0, 15));
+    }
+
+    #[test]
+    fn focus_range_edges() {
+        for body in ["", "\n\n", "text", "a\r\n\r\nb", "é\n\nü"] {
+            let segs = segments(body, &parse(body));
+            for c in boundaries(body) {
+                let r = focus_range(body, &segs, c, c);
+                // Always on char boundaries and around the cursor.
+                assert!(body.is_char_boundary(r.start) && body.is_char_boundary(r.end), "{body:?} {c}");
+                assert!(r.start <= c && c <= r.end, "{body:?} {c} {r:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_byte_shows_once_with_focus_ranges() {
+        for body in FIXTURES {
+            let blocks = parse(body);
+            let segs = segments(body, &blocks);
+            for c in boundaries(body) {
+                let active = focus_range(body, &segs, c, c);
+                let (before, after) = layout(body, &blocks, active.clone());
+                // Every non-blank part of the note is raw, in a raw row, or drawn by its block.
+                for seg in &segs {
+                    let drawn = seg.blocks.iter().all(|i| before.contains(&Row::Block(*i)) || after.contains(&Row::Block(*i)));
+                    let raw_rows = before.iter().chain(after.iter()).any(|r| matches!(r, Row::Raw(r) if r.start < seg.end && seg.start < r.end));
+                    let in_active = active.start <= seg.start && seg.content_end <= active.end;
+                    let blank = body[seg.start..seg.end].trim().is_empty();
+                    assert!(blank || in_active || raw_rows || (drawn && !seg.blocks.is_empty()), "{body:?} at {c}: {seg:?} {active:?}");
+                    // A block is never drawn twice.
+                    for i in &seg.blocks {
+                        let times = before.iter().chain(after.iter()).filter(|r| **r == Row::Block(*i)).count();
+                        assert!(times <= 1, "{body:?} at {c}: block {i} drawn {times} times");
                     }
                 }
             }

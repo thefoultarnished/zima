@@ -64,7 +64,7 @@ impl App {
         };
         let blocks = markdown::parse(&body);
         let (anchor, cursor) = (clamp_offset(&body, anchor), clamp_offset(&body, cursor));
-        let active = live::cover(&live::segments(&body, &blocks), anchor, cursor);
+        let active = live::focus_range(&body, &live::segments(&body, &blocks), anchor, cursor);
         let (before, after) = live::layout(&body, &blocks, active.clone());
         let ink = Ink::of(&ui);
         let shown_before = shown(&body, &blocks, before);
@@ -83,8 +83,9 @@ impl App {
         select_in(&ui, anchor, cursor, focus);
     }
 
-    /// Redraws the rows around the raw part after typing pauses. Only rows that changed are redrawn,
-    /// and the raw part itself stays as it is.
+    /// Redraws the rows around the raw part after typing pauses. Only rows that changed are redrawn.
+    /// If the raw part has grown past the block being typed in (several paragraphs typed in a row),
+    /// it shrinks back to that block, so the finished ones show styled.
     pub fn live_refresh(&mut self) {
         let Some(ui) = self.ui.upgrade() else { return };
         let Some(body) = self.current().map(|n| n.body.clone()) else { return };
@@ -95,6 +96,14 @@ impl App {
             return;
         }
         let blocks = markdown::parse(&body);
+        let (anchor, cursor) = self.selection();
+        let focus = live::focus_range(&body, &live::segments(&body, &blocks), anchor, cursor);
+        if focus != active && active.start <= focus.start && focus.end <= active.end {
+            // Keeps the typing line at the same height while the blocks above turn styled.
+            ui.invoke_live_anchor();
+            self.live_snap_at(anchor, cursor, false);
+            return;
+        }
         let (before, after) = live::layout(&body, &blocks, active);
         let (before, after) = (shown(&body, &blocks, before), shown(&body, &blocks, after));
         let ink = Ink::of(&ui);
@@ -130,7 +139,12 @@ impl App {
         ui.set_note_body(new_body.as_str().into());
         let edit = live::diff(&body, &new_body);
         self.live_history.record(live::Step { edit, cursor_before: self.cursor, cursor_after: cursor, typed: true, at_ms: now_ms() });
+        let new_paragraph = new_body[..cursor].ends_with("\n\n");
         self.set_body(new_body, cursor);
+        // Enter twice starts a new paragraph: the one just finished shows styled straight away.
+        if new_paragraph {
+            self.live_refresh();
+        }
     }
 
     /// Ctrl+Z in Live mode. Rust does the undo, because the text box can't see the blocks being rebuilt.
