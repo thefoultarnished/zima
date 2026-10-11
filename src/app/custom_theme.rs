@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
-use slint::{Color, ComponentHandle, TimerMode};
+use slint::{Color, TimerMode};
 
-use super::{App, parse_hex_color};
+use super::{App, known_theme, parse_hex_color};
 use crate::{Theme, system};
 
 /// Index of the Custom theme in Settings.
@@ -70,23 +70,44 @@ impl App {
         }
     }
 
-    /// Set the Custom theme's colours on the main window (called by `apply_appearance`).
-    pub(super) fn apply_custom_theme(&mut self) {
-        let Some(ui) = self.ui.upgrade() else { return };
-        let theme = ui.global::<Theme>();
+    /// Read theme.json into `custom_theme` while the Custom theme is on, and watch it for changes
+    /// while a window shows it.
+    pub(super) fn refresh_custom_theme(&mut self) {
         if self.state.theme != CUSTOM {
             self.theme_watch.stop();
-            theme.set_custom(false);
             return;
         }
-        if !self.theme_watch.running() {
+        if self.ui.upgrade().is_some() && !self.theme_watch.running() {
             self.watch_custom_theme();
         }
         match self.load_custom_theme() {
             Ok(custom) => self.custom_theme = custom,
             Err(e) => self.toast(&format!("theme.json has a mistake: {e}"), true),
         }
-        set_custom_colours(&theme, &self.custom_theme);
+    }
+
+    /// Give a window (the main one, a sticky note, the quick-capture box) the look chosen in
+    /// Settings: theme, custom colours, accent and font.
+    pub(super) fn theme_look(&self, theme: &Theme) {
+        let chosen = known_theme(self.state.theme);
+        if chosen == CUSTOM {
+            set_custom_colours(theme, &self.custom_theme);
+        } else {
+            theme.set_custom(false);
+        }
+        theme.set_choice(match chosen {
+            CUSTOM if self.custom_theme.dark => 2,
+            CUSTOM => 1,
+            other => other,
+        });
+        match self.state.accent.as_deref().and_then(parse_hex_color) {
+            Some(color) => {
+                theme.set_custom_accent(color);
+                theme.set_has_custom_accent(true);
+            }
+            None => theme.set_has_custom_accent(false),
+        }
+        theme.set_font(self.state.font.as_str().into());
     }
 
     /// Open theme.json in the default editor (writing the starter theme first), and switch to it.
@@ -149,28 +170,4 @@ fn set_custom_colours(theme: &Theme, custom: &CustomTheme) {
     theme.set_custom_backdrop_top(stops.first().copied().unwrap_or(paper));
     theme.set_custom_backdrop_bottom(stops.last().copied().unwrap_or(paper));
     theme.set_custom(true);
-}
-
-/// Give a sticky note or quick-capture window the main window's look.
-pub fn copy_theme(main: &Theme, other: &Theme) {
-    other.set_choice(main.get_choice());
-    other.set_font(main.get_font());
-    other.set_has_custom_accent(main.get_has_custom_accent());
-    other.set_custom_accent(main.get_custom_accent());
-    other.set_custom_dark(main.get_custom_dark());
-    other.set_custom_name(main.get_custom_name());
-    other.set_custom_paper(main.get_custom_paper());
-    other.set_custom_sidebar(main.get_custom_sidebar());
-    other.set_custom_ink(main.get_custom_ink());
-    other.set_custom_ink_soft(main.get_custom_ink_soft());
-    other.set_custom_muted(main.get_custom_muted());
-    other.set_custom_rule(main.get_custom_rule());
-    other.set_custom_hover(main.get_custom_hover());
-    other.set_custom_selected(main.get_custom_selected());
-    other.set_custom_theme_accent(main.get_custom_theme_accent());
-    other.set_custom_on_accent(main.get_custom_on_accent());
-    other.set_custom_popover(main.get_custom_popover());
-    other.set_custom_backdrop_top(main.get_custom_backdrop_top());
-    other.set_custom_backdrop_bottom(main.get_custom_backdrop_bottom());
-    other.set_custom(main.get_custom());
 }

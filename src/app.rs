@@ -4,7 +4,6 @@ mod backups;
 mod capture;
 mod custom_theme;
 mod exchange;
-use custom_theme::CUSTOM;
 /// Highest theme number (8 Sakura, 9 Cyberpunk, 10 Expedition 33).
 const LAST_THEME: i32 = 20;
 mod finding;
@@ -18,6 +17,7 @@ mod organize;
 mod stats;
 mod sticky;
 mod summary;
+pub use summary::Summary;
 mod sync;
 mod tasks_view;
 mod versions;
@@ -28,7 +28,7 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::{self, Rc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{Local, TimeZone};
 use slint::{ComponentHandle, Model, ModelRc, StyledText, Timer, TimerMode, VecModel, Weak};
@@ -142,7 +142,7 @@ pub struct App {
     word_base: usize,
     /// What the lists need from each note's text, kept until the note changes.
     summaries: RefCell<summary::Summaries>,
-    /// The sidebar lists missed a minute's update while the window was hidden.
+    /// The sidebar lists missed a minute's update while the window was minimised.
     lists_stale: std::cell::Cell<bool>,
     /// The day the sidebar's times were last brought up to date.
     times_day: chrono::NaiveDate,
@@ -151,12 +151,24 @@ pub struct App {
     /// The history panel's copies of the open note (unix ms, newest first).
     versions: Vec<i64>,
     toast_timer: Timer,
+    /// The message last shown, so a window opened a moment later still shows it.
+    toast: Option<Toast>,
     /// Exchange rates for `@curr`, and their download.
     exchange: exchange::Exchange,
     /// The last save failed and the user was told; cleared (with a message) once saving works again.
     save_failed: bool,
     this: rc::Weak<RefCell<App>>,
+    /// The main window, built when Zima is opened and dropped when it goes to the tray (a hidden
+    /// window still costs memory and wakes the app). It holds callbacks that hold the app, so it
+    /// must be dropped (`free_window`) for the app to be freed.
+    window: Option<AppWindow>,
+    /// Weak copy of `window`; empty while Zima is in the tray.
     ui: Weak<AppWindow>,
+}
+
+thread_local! {
+    /// The app, for things arriving through the event loop from other threads (`App` can't cross threads).
+    static APP: RefCell<rc::Weak<RefCell<App>>> = RefCell::new(rc::Weak::new());
 }
 
 #[derive(Clone)]
@@ -171,6 +183,15 @@ enum ToastAction {
     ShowBackups,
     /// The folder holding index.json (and the copy of a damaged one).
     ShowDataFolder,
+}
+
+/// A toast that was shown (or would have been, with no window open).
+struct Toast {
+    text: String,
+    error: bool,
+    labels: Vec<String>,
+    /// When it should disappear.
+    until: Instant,
 }
 
 struct FocusTimer {
@@ -189,8 +210,10 @@ struct Snapshot {
 }
 
 impl App {
+    /// Load the notes and start everything that runs without a window (reminders, backups, sync,
+    /// sticky notes, the capture hotkey). `show_window` builds the window.
     /// `import`: Zima files to import before showing anything (from `--import`).
-    pub fn load(store: Store, ui: &AppWindow, import: &[PathBuf]) -> Rc<RefCell<Self>> {
+    pub fn load(store: Store, import: &[PathBuf]) -> Rc<RefCell<Self>> {
         let (notes, rebuilt) = store.load_notes();
         let state = store.load_state();
         let reminders = store.load_reminders();
@@ -252,15 +275,18 @@ impl App {
             last_copy: Default::default(),
             versions: Vec::new(),
             toast_timer: Timer::default(),
+            toast: None,
             save_failed: false,
             exchange: Default::default(),
             live: None,
             live_history: live::History::default(),
             this: rc::Weak::new(),
-            ui: ui.as_weak(),
+            window: None,
+            ui: Weak::default(),
         }));
         let mut this = app.borrow_mut();
         this.this = Rc::downgrade(&app);
+        APP.with(|cell| *cell.borrow_mut() = this.this.clone());
 
         // Drop stale references, e.g. to notes deleted outside the app.
         let live: HashSet<NoteId> = this.notes.iter().filter(|n| n.is_live()).map(|n| n.id).collect();
@@ -272,46 +298,18 @@ impl App {
         this.state.transparency = this.state.transparency.clamp(0.3, 1.0);
         this.state.theme = known_theme(this.state.theme);
 
-        let sections = &this.state.sections;
-        ui.set_show_active(sections.active);
-        ui.set_show_favorites(sections.favorites);
-        ui.set_show_recent(sections.recent);
-        ui.set_show_all(sections.all);
-        ui.set_show_bin(sections.bin);
-        ui.set_show_pinned(sections.pinned);
-        ui.set_show_tags(sections.tags);
-        ui.set_show_archive(sections.archive);
-        ui.set_show_saved(sections.saved);
-        ui.set_show_notebooks(sections.notebooks);
-        ui.set_sidebar_open(!this.state.sidebar_collapsed);
-        ui.set_sidebar_width(clamp_sidebar_width(this.state.sidebar_width));
-        ui.set_split_ratio(clamp_split_ratio(this.state.split_ratio));
-        ui.set_launch_at_login(system::launch_at_login());
-        ui.set_software_rendering(this.state.software_rendering);
-        ui.set_close_to_tray(this.state.close_to_tray);
-        ui.set_note_order(this.state.note_order);
-        ui.set_version_history(this.state.version_history);
-        ui.set_tasks_show_done(this.state.tasks_show_done);
-        if let Some(placement) = this.state.window {
-            window::restore(ui, placement);
-        }
-        this.apply_appearance();
-
         if !import.is_empty() {
             this.import_paths(import);
         }
         if this.notes.is_empty() {
             this.new_note();
-        } else {
-            this.refresh_lists();
-            this.load_editor();
         }
         this.auto_purge();
+        // The stickies take their colours from the settings, not from a window.
+        this.refresh_custom_theme();
         this.restore_stickies();
         this.register_capture_hotkey();
         this.watch_for_external_changes();
-        this.refresh_sync_ui();
-        this.refresh_reminders();
         // Anything that came due while the app was closed.
         this.fire_due_reminders(true);
         if rebuilt > 0 {
@@ -323,7 +321,51 @@ impl App {
             );
         }
         drop(this);
+        start_timers(&app);
         app
+    }
+
+    /// Fill a freshly built window from the saved settings and notes.
+    fn fill_window(&mut self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let sections = &self.state.sections;
+        ui.set_show_active(sections.active);
+        ui.set_show_favorites(sections.favorites);
+        ui.set_show_recent(sections.recent);
+        ui.set_show_all(sections.all);
+        ui.set_show_bin(sections.bin);
+        ui.set_show_pinned(sections.pinned);
+        ui.set_show_tags(sections.tags);
+        ui.set_show_archive(sections.archive);
+        ui.set_show_saved(sections.saved);
+        ui.set_show_notebooks(sections.notebooks);
+        ui.set_sidebar_open(!self.state.sidebar_collapsed);
+        ui.set_sidebar_width(clamp_sidebar_width(self.state.sidebar_width));
+        ui.set_split_ratio(clamp_split_ratio(self.state.split_ratio));
+        ui.set_launch_at_login(system::launch_at_login());
+        ui.set_software_rendering(self.state.software_rendering);
+        ui.set_close_to_tray(self.state.close_to_tray);
+        ui.set_note_order(self.state.note_order);
+        ui.set_version_history(self.state.version_history);
+        ui.set_tasks_show_done(self.state.tasks_show_done);
+        ui.set_search_text(self.search.as_str().into());
+        if let Some(placement) = self.state.window {
+            window::restore(&ui, placement);
+        }
+        self.apply_appearance();
+        self.times_day = Local::now().date_naive();
+        self.refresh_lists();
+        self.load_editor();
+        self.refresh_sync_ui();
+        self.refresh_reminders();
+        if self.timer.is_some() {
+            self.arm_timer_tick();
+            self.tick_timer();
+        }
+        let left = self.toast.as_ref().and_then(|t| toast_left(t.until, Instant::now()));
+        if let Some(left) = left {
+            self.show_toast(left);
+        }
     }
 
     fn find(&self, id: NoteId) -> Option<&Note> {
@@ -820,14 +862,7 @@ impl App {
 
     pub fn start_timer(&mut self, minutes: u32, is_break: bool) {
         self.timer = Some(FocusTimer { ends: now_ms() + minutes as i64 * 60_000, minutes, is_break });
-        let app = self.this.clone();
-        self.timer_tick.start(TimerMode::Repeated, Duration::from_secs(1), move || {
-            if let Some(app) = app.upgrade() {
-                if let Ok(mut app) = app.try_borrow_mut() {
-                    app.tick_timer();
-                }
-            }
-        });
+        self.arm_timer_tick();
         self.tick_timer();
         let label = if is_break { "Break" } else { "Focus" };
         self.toast(&format!("{label} timer: {minutes} min"), false);
@@ -838,30 +873,57 @@ impl App {
         self.tick_timer();
     }
 
-    /// Called every second while a timer runs.
+    /// (Re)start the timer's tick for how it should run now: every second while the window shows
+    /// the countdown, otherwise one wake-up when it ends.
+    fn arm_timer_tick(&self) {
+        let Some(timer) = &self.timer else { return };
+        let (mode, interval) = match timer_tick_plan(self.ui.upgrade().is_some(), timer.ends - now_ms()) {
+            TimerTick::EverySecond => (TimerMode::Repeated, Duration::from_secs(1)),
+            TimerTick::Once(wait) => (TimerMode::SingleShot, wait),
+        };
+        let app = self.this.clone();
+        self.timer_tick.start(mode, interval, move || {
+            if let Some(app) = app.upgrade() {
+                with_app(&app, |a| a.tick_timer());
+            }
+        });
+    }
+
+    /// Called every second while a timer runs and the window is open, and when it ends.
     fn tick_timer(&mut self) {
-        let Some(ui) = self.ui.upgrade() else { return };
+        let ui = self.ui.upgrade();
         let Some(timer) = &self.timer else {
             self.timer_tick.stop();
-            ui.set_timer_text("".into());
+            if let Some(ui) = ui {
+                ui.set_timer_text("".into());
+            }
             return;
         };
         let left = (timer.ends - now_ms()).max(0) / 1000;
-        ui.set_timer_text(format!("{}:{:02}", left / 60, left % 60).into());
-        ui.set_timer_break(timer.is_break);
-        if left == 0 {
-            let (minutes, is_break) = (timer.minutes, timer.is_break);
-            self.timer = None;
-            self.timer_tick.stop();
-            ui.set_timer_text("".into());
-            if is_break {
-                show_notification("Break's over", "Ready for another focus session?");
-                self.toast_with("Break's over", false, vec![("Focus 25 min".into(), ToastAction::StartTimer(25, false))]);
-            } else {
-                self.record_focus(minutes);
-                show_notification("Focus session done", &format!("{minutes} minutes. Time for a break."));
-                self.toast_with("Focus session done", false, vec![("5-min break".into(), ToastAction::StartTimer(5, true))]);
+        if let Some(ui) = &ui {
+            ui.set_timer_text(format!("{}:{:02}", left / 60, left % 60).into());
+            ui.set_timer_break(timer.is_break);
+        }
+        if left > 0 {
+            if ui.is_none() {
+                // Woke early (the clock was changed): wait for the rest.
+                self.arm_timer_tick();
             }
+            return;
+        }
+        let (minutes, is_break) = (timer.minutes, timer.is_break);
+        self.timer = None;
+        self.timer_tick.stop();
+        if let Some(ui) = &ui {
+            ui.set_timer_text("".into());
+        }
+        if is_break {
+            show_notification("Break's over", "Ready for another focus session?");
+            self.toast_with("Break's over", false, vec![("Focus 25 min".into(), ToastAction::StartTimer(25, false))]);
+        } else {
+            self.record_focus(minutes);
+            show_notification("Focus session done", &format!("{minutes} minutes. Time for a break."));
+            self.toast_with("Focus session done", false, vec![("5-min break".into(), ToastAction::StartTimer(5, true))]);
         }
     }
 
@@ -1130,22 +1192,9 @@ impl App {
     fn apply_appearance(&mut self) {
         let Some(ui) = self.ui.upgrade() else { return };
         let theme = ui.global::<Theme>();
-        self.apply_custom_theme();
-        let choice = match known_theme(self.state.theme) {
-            CUSTOM => {
-                if self.custom_theme.dark { 2 } else { 1 }
-            }
-            other => other,
-        };
-        theme.set_choice(choice);
+        self.refresh_custom_theme();
+        self.theme_look(&theme);
         theme.set_selected_theme(known_theme(self.state.theme));
-        match self.state.accent.as_deref().and_then(parse_hex_color) {
-            Some(color) => {
-                theme.set_custom_accent(color);
-                theme.set_has_custom_accent(true);
-            }
-            None => theme.set_has_custom_accent(false),
-        }
         theme.set_surface_alpha(self.state.transparency);
         theme.set_font(self.state.font.as_str().into());
         theme.set_text_scale(self.state.zoom.clamp(0.7, 2.0));
@@ -1375,13 +1424,79 @@ impl App {
 
     // ----- Window and tray -----
 
-    /// The window's close button or Alt+F4: hide to the tray, or quit if that setting is off.
-    /// The first time it hides, say so.
+    /// Build the main window if Zima is in the tray, then show it. `front`: take the keyboard too
+    /// (another launch asked for the window); the tray icon leaves that to Windows.
+    pub fn show_window(&mut self, front: bool) -> Result<(), slint::PlatformError> {
+        if self.window.is_none() {
+            let ui = AppWindow::new()?;
+            window::install(&ui);
+            if let Some(app) = self.this.upgrade() {
+                wire_window(&app, &ui);
+            }
+            self.ui = ui.as_weak();
+            self.window = Some(ui);
+            self.fill_window();
+        }
+        let Some(ui) = &self.window else { return Ok(()) };
+        ui.show()?;
+        ui.window().set_minimized(false);
+        if front {
+            window::bring_to_front(ui);
+        }
+        Ok(())
+    }
+
+    /// `show_window` for callers with nobody to tell.
+    pub fn show_window_or_log(&mut self, front: bool) {
+        if let Err(e) = self.show_window(front) {
+            eprintln!("couldn't open the window: {e}");
+        }
+    }
+
+    /// Drop the main window, and the memory and wake-ups it costs, until Zima is opened again.
+    fn free_window(&mut self) {
+        let Some(window) = self.window.take() else { return };
+        let _ = window.hide();
+        self.ui = Weak::default();
+        // What belonged to the old window's panels: the next one starts closed and empty.
+        self.live = None;
+        self.live_history.clear();
+        self.undo.clear();
+        self.redo.clear();
+        self.find_query.clear();
+        self.find_matches.clear();
+        self.find_index = 0;
+        self.palette_entries.clear();
+        self.link_preview.clear();
+        self.suggestion_at = None;
+        self.dismissed_at = None;
+        // Presenting ends; `state.window` still holds the spot from before it.
+        self.slides.clear();
+        self.restore_to = None;
+        self.versions.clear();
+        self.shortcut_filter.clear();
+        #[cfg(windows)]
+        {
+            self.spell = None;
+        }
+        self.theme_watch.stop();
+        self.toast_timer.stop();
+        // A focus timer now needs one wake-up at its end, not one a second.
+        self.arm_timer_tick();
+        // Dropped after this turn, not inside one of its own callbacks (like `close_capture`).
+        Timer::single_shot(Duration::ZERO, move || drop(window));
+    }
+
+    /// The window's close button or Alt+F4: free the window and keep running in the tray, or
+    /// quit if that setting is off. The first time it goes to the tray, say so.
     pub fn window_closed(&mut self) {
         self.remember_window();
         self.remember_cursor();
         self.flush();
         if !self.state.close_to_tray {
+            if let Some(ui) = self.ui.upgrade() {
+                let _ = ui.hide();
+            }
             let _ = slint::quit_event_loop();
             return;
         }
@@ -1390,6 +1505,7 @@ impl App {
             self.save_state();
             show_notification("Zima is still running", "Reminders will still fire. Quit from the tray icon.");
         }
+        self.free_window();
     }
 
     /// Save where the main window is, so it opens there next time. Not while presenting, when it
@@ -1410,18 +1526,30 @@ impl App {
         self.toast_with(message, error, Vec::new());
     }
 
-    /// Show a message in the top-right; with buttons it stays up longer.
+    /// Show a message in the top-right; with buttons it stays up longer. With no window open it
+    /// waits, so a window opened soon after still shows it.
     fn toast_with(&mut self, message: &str, error: bool, actions: Vec<(String, ToastAction)>) {
-        let Some(ui) = self.ui.upgrade() else { return };
-        ui.set_toast_text(message.into());
-        ui.set_toast_error(error);
-        let labels: Vec<slint::SharedString> = actions.iter().map(|(label, _)| label.as_str().into()).collect();
+        let duration = if actions.is_empty() { TOAST_DURATION } else { TOAST_DURATION * 3 };
+        self.toast = Some(Toast {
+            text: message.to_string(),
+            error,
+            labels: actions.iter().map(|(label, _)| label.clone()).collect(),
+            until: Instant::now() + duration,
+        });
+        self.toast_actions = actions.into_iter().map(|(_, action)| action).collect();
+        self.show_toast(duration);
+    }
+
+    /// Put the last toast in the window for `left`, if there is one.
+    fn show_toast(&self, left: Duration) {
+        let (Some(ui), Some(toast)) = (self.ui.upgrade(), &self.toast) else { return };
+        ui.set_toast_text(toast.text.as_str().into());
+        ui.set_toast_error(toast.error);
+        let labels: Vec<slint::SharedString> = toast.labels.iter().map(|label| label.as_str().into()).collect();
         ui.set_toast_actions(ModelRc::new(VecModel::from(labels)));
         ui.set_toast_visible(true);
-        let duration = if actions.is_empty() { TOAST_DURATION } else { TOAST_DURATION * 3 };
-        self.toast_actions = actions.into_iter().map(|(_, action)| action).collect();
         let ui = self.ui.clone();
-        self.toast_timer.start(TimerMode::SingleShot, duration, move || {
+        self.toast_timer.start(TimerMode::SingleShot, left, move || {
             if let Some(ui) = ui.upgrade() {
                 ui.set_toast_visible(false);
             }
@@ -1432,6 +1560,7 @@ impl App {
     pub fn toast_action(&mut self, index: usize) {
         let Some(action) = self.toast_actions.get(index).cloned() else { return };
         self.toast_actions.clear();
+        self.toast = None;
         if let Some(ui) = self.ui.upgrade() {
             ui.set_toast_visible(false);
         }
@@ -1460,9 +1589,7 @@ impl App {
             }
             ToastAction::OpenNote(id) => {
                 self.open(id);
-                if let Some(ui) = self.ui.upgrade() {
-                    let _ = ui.show();
-                }
+                self.show_window_or_log(false);
             }
             ToastAction::Restart => self.restart(),
             ToastAction::ShowBackups => self.open_backups_folder(),
@@ -1683,18 +1810,32 @@ impl App {
         // Words plus filters: #tag, notebook:, created:, modified:, has:, is: (see search.rs).
         let search = crate::search::parse(&self.search, Local::now().date_naive());
         let query = search.text();
-        let matches = |n: &Note| search.matches(n);
+        // Each note is checked once, then every section (and the fading) reuses the answer.
+        let matching: Option<HashSet<NoteId>> = (!search.is_empty())
+            .then(|| self.notes.iter().filter(|n| search.matches(n, &self.summary(n))).map(|n| n.id).collect());
+        let matches = |n: &Note| matching.as_ref().is_none_or(|m| m.contains(&n.id));
         // The matching line, when the match is in the body rather than the title.
         let first_word = search.words.first().cloned().unwrap_or_default();
+        // Worked out once per note: a note shows in several sections.
+        let snippets: RefCell<std::collections::HashMap<NoteId, String>> = RefCell::default();
         let snippet = |n: &Note| -> String {
-            if first_word.is_empty() || n.title.to_lowercase().contains(&query) {
+            if first_word.is_empty() {
                 return String::new();
             }
-            n.body
-                .lines()
-                .find(|l| l.to_lowercase().contains(&first_word))
-                .map(|l| l.trim().chars().take(80).collect())
-                .unwrap_or_default()
+            snippets
+                .borrow_mut()
+                .entry(n.id)
+                .or_insert_with(|| {
+                    if n.title.to_lowercase().contains(&query) {
+                        return String::new();
+                    }
+                    n.body
+                        .lines()
+                        .find(|l| l.to_lowercase().contains(&first_word))
+                        .map(|l| l.trim().chars().take(80).collect())
+                        .unwrap_or_default()
+                })
+                .clone()
         };
         // `here`: this section is where the open note is highlighted (see below).
         let row = |n: &Note, here: bool| NoteRow {
@@ -1769,8 +1910,9 @@ impl App {
     }
 
     /// Every minute: keep times like "5m" fresh by changing just that text on the rows already
-    /// there. Nothing is drawn while the window is hidden or minimised, so then the lists wait to
-    /// be rebuilt until it's back. A new day rebuilds them (date searches, due dates).
+    /// there. Nothing is drawn while the window is minimised, so then the lists wait to be rebuilt
+    /// until it's back (in the tray there is no window; a new one builds them). A new day rebuilds
+    /// them (date searches, due dates).
     fn refresh_times(&mut self) {
         let Some(ui) = self.ui.upgrade() else { return };
         if !ui.window().is_visible() || ui.window().is_minimized() {
@@ -2033,8 +2175,8 @@ fn parse_id(id: &str) -> Option<NoteId> {
     id.parse().ok()
 }
 
-/// Connect UI callbacks to the app.
-pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
+/// Connect a new main window's callbacks to the app.
+fn wire_window(app: &Rc<RefCell<App>>, ui: &AppWindow) {
     macro_rules! on_id {
         ($setter:ident, $method:ident) => {{
             let app = app.clone();
@@ -2251,6 +2393,24 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
         });
     }
 
+    tick_clock(ui.as_weak());
+
+    // The close button and Alt+F4 free the window (or quit), see `window_closed`.
+    ui.on_close_window({
+        let app = app.clone();
+        move || with_app(&app, |a| a.window_closed())
+    });
+    ui.window().on_close_requested({
+        let app = app.clone();
+        move || {
+            with_app(&app, |a| a.window_closed());
+            slint::CloseRequestResponse::HideWindow
+        }
+    });
+}
+
+/// Start what runs for the whole life of the app, window or not.
+fn start_timers(app: &Rc<RefCell<App>>) {
     let check = Timer::default();
     check.start(TimerMode::Repeated, REMINDER_CHECK, {
         let app = Rc::downgrade(app);
@@ -2261,8 +2421,6 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
         }
     });
     std::mem::forget(check); // lives for the whole app
-
-    tick_clock(ui.as_weak());
 
     // Keep relative times ("5m", "Yesterday", "Today 5:00 PM") fresh.
     let tick = Timer::default();
@@ -2295,7 +2453,7 @@ pub fn wire(app: &Rc<RefCell<App>>, ui: &AppWindow) {
 
 /// Run `f` on the app now, or, if the app is busy (Slint can call back into Rust synchronously,
 /// e.g. moving the cursor from Rust fires `cursor-moved`), right after the current call finishes.
-fn with_app(app: &Rc<RefCell<App>>, f: impl FnOnce(&mut App) + 'static) {
+pub(crate) fn with_app(app: &Rc<RefCell<App>>, f: impl FnOnce(&mut App) + 'static) {
     match app.try_borrow_mut() {
         Ok(mut app) => f(&mut app),
         Err(_) => {
@@ -2307,6 +2465,42 @@ fn with_app(app: &Rc<RefCell<App>>, f: impl FnOnce(&mut App) + 'static) {
             });
         }
     }
+}
+
+/// Run `f` on the app from the event loop, for callers on other threads or outside any window
+/// (another launch asking for the window, the Ctrl+Alt+N hotkey).
+pub(crate) fn run_on_app(f: fn(&mut App)) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(app) = APP.with(|cell| cell.borrow().upgrade()) {
+            with_app(&app, f);
+        }
+    });
+}
+
+/// Another launch of Zima on this folder asked for the window.
+pub(crate) fn show_from_any_thread() {
+    run_on_app(|a| a.show_window_or_log(true));
+}
+
+/// How the focus timer should tick: every second while a window shows the countdown, otherwise
+/// once, when it ends (`left_ms` from now; never 0, which would spin).
+fn timer_tick_plan(window_open: bool, left_ms: i64) -> TimerTick {
+    if window_open {
+        TimerTick::EverySecond
+    } else {
+        TimerTick::Once(Duration::from_millis(left_ms.max(1) as u64))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum TimerTick {
+    EverySecond,
+    Once(Duration),
+}
+
+/// How much longer a toast that ends at `until` should show; `None` once it has.
+fn toast_left(until: Instant, now: Instant) -> Option<Duration> {
+    until.checked_duration_since(now).filter(|left| !left.is_zero())
 }
 
 /// Clock in the title bar. It shows minutes only, so it wakes once a minute, just after the minute turns.
@@ -2357,6 +2551,37 @@ mod tests {
         assert_eq!(rows.row_data(0).unwrap().title, "t");
         // An empty list is fine.
         retime_rows(&model(std::iter::empty()), time);
+    }
+
+    #[test]
+    fn open_window_ticks_every_second() {
+        assert_eq!(timer_tick_plan(true, 600_000), TimerTick::EverySecond);
+        // Even when it's about to end: the countdown is on screen.
+        assert_eq!(timer_tick_plan(true, 0), TimerTick::EverySecond);
+    }
+
+    #[test]
+    fn tray_timer_wakes_once_at_the_end() {
+        assert_eq!(timer_tick_plan(false, 90_000), TimerTick::Once(Duration::from_secs(90)));
+        // A huge timer is a long wait, not an overflow.
+        assert_eq!(timer_tick_plan(false, 24 * 3_600_000), TimerTick::Once(Duration::from_secs(24 * 3600)));
+    }
+
+    #[test]
+    fn tray_timer_never_waits_zero() {
+        assert_eq!(timer_tick_plan(false, 0), TimerTick::Once(Duration::from_millis(1)));
+        assert_eq!(timer_tick_plan(false, -5_000), TimerTick::Once(Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn toast_shows_until_its_time_is_up() {
+        let start = Instant::now();
+        let until = start + Duration::from_secs(3);
+        assert_eq!(toast_left(until, start), Some(Duration::from_secs(3)));
+        assert_eq!(toast_left(until, start + Duration::from_secs(1)), Some(Duration::from_secs(2)));
+        // Over exactly on time, or long ago: nothing to show.
+        assert_eq!(toast_left(until, until), None);
+        assert_eq!(toast_left(until, until + Duration::from_secs(60)), None);
     }
 
     #[test]

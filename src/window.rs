@@ -54,7 +54,7 @@ pub fn apply_mica(ui: &AppWindow, dark: bool) -> bool {
         .is_some()
 }
 
-/// Title bar buttons, drag and resize. (Closing is handled in main: it hides to the tray.)
+/// Title bar buttons, drag and resize. (Closing is handled by the app: it frees the window and goes to the tray.)
 pub fn install(ui: &AppWindow) {
     ui.on_minimize_window({
         let ui = ui.as_weak();

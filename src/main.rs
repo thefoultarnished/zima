@@ -29,8 +29,6 @@ mod window;
 
 use std::path::PathBuf;
 
-use slint::ComponentHandle;
-
 slint::include_modules!();
 
 /// Command line:
@@ -76,60 +74,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     system::set_app_id();
     window::select_backend(store.load_state().software_rendering)?;
 
-    let ui = AppWindow::new()?;
-    window::install(&ui);
+    // The window is built when Zima is opened, and dropped again when it goes to the tray.
+    let app = app::App::load(store, &import);
 
-    let app = app::App::load(store, &ui, &import);
-    app::wire(&app, &ui);
-
-    // Closing the window (close button or Alt+F4) hides it to the tray, or quits if
-    // "Keep running in the tray" is off.
-    ui.on_close_window({
-        let ui = ui.as_weak();
-        let app = app.clone();
-        move || {
-            if let Some(ui) = ui.upgrade() {
-                let _ = ui.hide();
-            }
-            app.borrow_mut().window_closed();
-        }
-    });
-    ui.window().on_close_requested({
-        let app = app.clone();
-        move || {
-            app.borrow_mut().window_closed();
-            slint::CloseRequestResponse::HideWindow
-        }
-    });
-
-    // Another launch of Zima on this folder asked for the window.
-    instance.on_show({
-        let ui = ui.as_weak();
-        move || {
-            let _ = ui.upgrade_in_event_loop(|ui| {
-                let _ = ui.show();
-                ui.window().set_minimized(false);
-                window::bring_to_front(&ui);
-            });
-        }
-    });
+    instance.on_show(app::show_from_any_thread);
 
     let tray = TrayIcon::new()?;
-    let show_window = {
-        let ui = ui.as_weak();
-        move || {
-            if let Some(ui) = ui.upgrade() {
-                let _ = ui.show();
-                ui.window().set_minimized(false);
-            }
-        }
-    };
-    tray.on_open(show_window.clone());
+    tray.on_open({
+        let app = app.clone();
+        move || app::with_app(&app, |a| a.show_window_or_log(false))
+    });
     tray.on_new_note({
         let app = app.clone();
+        // The window first, so the title box exists to take focus.
         move || {
-            show_window();
-            app.borrow_mut().new_note();
+            app::with_app(&app, |a| {
+                a.show_window_or_log(false);
+                a.new_note();
+            })
         }
     });
     tray.on_quit({
@@ -141,9 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     if !hidden {
-        ui.show()?;
+        app.borrow_mut().show_window(false)?;
     }
-    // Keep running with the window hidden, until "Quit" in the tray.
+    // Keep running in the tray, with no window, until "Quit" in the tray.
     slint::run_event_loop_until_quit()?;
 
     // Save anything still waiting on the debounce timer, and where the window and cursor are.

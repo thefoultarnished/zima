@@ -18,6 +18,8 @@ pub struct Summary {
     /// Like "3/5"; empty without checkboxes.
     pub progress: String,
     pub tasks: Vec<Task>,
+    /// The whole text in lowercase, so searching doesn't make a new copy of it on every key.
+    pub lower: String,
 }
 
 impl Summary {
@@ -34,6 +36,7 @@ impl Summary {
             tags,
             progress: checklist_progress(body),
             tasks: tasks::extract(body, now),
+            lower: body.to_lowercase(),
         }
     }
 }
@@ -97,6 +100,12 @@ mod tests {
         assert_eq!(s.tasks.len(), 2);
         assert!(s.tasks[0].done && !s.tasks[1].done);
         assert!(s.tasks[1].due.is_some());
+    }
+
+    #[test]
+    fn summary_keeps_lowercase_text() {
+        assert_eq!(Summary::of("Ärger ÄBC İx", at(7)).lower, "Ärger ÄBC İx".to_lowercase());
+        assert_eq!(Summary::of("", at(7)).lower, "");
     }
 
     #[test]

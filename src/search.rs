@@ -9,6 +9,7 @@
 
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
 
+use crate::app::Summary;
 use crate::model::Note;
 
 #[derive(Debug, Default, PartialEq)]
@@ -24,7 +25,6 @@ pub struct Query {
 }
 
 impl Query {
-    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         *self == Query::default()
     }
@@ -34,14 +34,15 @@ impl Query {
         self.words.join(" ")
     }
 
-    pub fn matches(&self, note: &Note) -> bool {
+    /// Whether `note` fits. `summary` is the note's saved summary, so its text isn't lowercased or
+    /// scanned again for tags and tasks.
+    pub fn matches(&self, note: &Note, summary: &Summary) -> bool {
         let title = note.title.to_lowercase();
-        let body = note.body.to_lowercase();
-        if !self.words.iter().all(|w| title.contains(w.as_str()) || body.contains(w.as_str())) {
+        if !self.words.iter().all(|w| title.contains(w.as_str()) || summary.lower.contains(w.as_str())) {
             return false;
         }
         if let Some(tag) = &self.tag {
-            if !crate::app::extract_tags(&note.body).iter().any(|t| t.to_lowercase() == *tag) {
+            if !summary.tags.contains(tag) {
                 return false;
             }
         }
@@ -59,14 +60,13 @@ impl Query {
                 }
             }
         }
-        let now = Local::now();
         self.has.iter().all(|h| match h.as_str() {
-            "tasks" => !crate::tasks::extract(&note.body, now).is_empty(),
-            "open-tasks" => crate::tasks::extract(&note.body, now).iter().any(|t| !t.done),
-            "due" => crate::tasks::extract(&note.body, now).iter().any(|t| t.due.is_some() && !t.done),
-            "links" => note.body.contains("[[") || note.body.contains("]("),
-            "tags" => !crate::app::extract_tags(&note.body).is_empty(),
-            "code" => note.body.contains("```") || note.body.contains('`'),
+            "tasks" => !summary.tasks.is_empty(),
+            "open-tasks" => summary.tasks.iter().any(|t| !t.done),
+            "due" => summary.tasks.iter().any(|t| t.due.is_some() && !t.done),
+            "links" => summary.lower.contains("[[") || summary.lower.contains("]("),
+            "tags" => !summary.tags.is_empty(),
+            "code" => summary.lower.contains('`'),
             _ => true,
         }) && self.is.iter().all(|i| match i.as_str() {
             "pinned" => note.pinned,
@@ -175,8 +175,46 @@ mod tests {
     fn matches_notes() {
         let note = Note { title: "Atlas".into(), body: "- [ ] ship #work".into(), pinned: true, ..Default::default() };
         let today = Local::now().date_naive();
-        assert!(parse("atlas has:open-tasks is:pinned #work", today).matches(&note));
-        assert!(!parse("atlas is:favorite", today).matches(&note));
-        assert!(!parse("nothing", today).matches(&note));
+        let hit = |q: &str, note: &Note| parse(q, today).matches(note, &Summary::of(&note.body, Local::now()));
+        assert!(hit("atlas has:open-tasks is:pinned #work", &note));
+        assert!(!hit("atlas is:favorite", &note));
+        assert!(!hit("nothing", &note));
+    }
+
+    fn hit(q: &str, title: &str, body: &str) -> bool {
+        let note = Note { title: title.into(), body: body.into(), notebook: Some("Work".into()), ..Default::default() };
+        parse(q, Local::now().date_naive()).matches(&note, &Summary::of(body, Local::now()))
+    }
+
+    #[test]
+    fn finds_words_in_title_or_body_ignoring_case() {
+        assert!(hit("ÄBC", "x", "an äbc here"));
+        assert!(hit("äbc", "ÄBC", ""));
+        assert!(hit("i̇", "İ", ""));
+        assert!(hit("atlas plan", "Atlas", "the PLAN"));
+        assert!(!hit("atlas plan", "Atlas", "nothing"));
+        assert!(hit("", "", ""));
+        assert!(!hit("word", "", ""));
+    }
+
+    #[test]
+    fn tag_filter_uses_the_notes_tags() {
+        assert!(hit("#work", "t", "ship #Work"));
+        assert!(!hit("#work", "t", "ship #home"));
+        assert!(!hit("#work", "t", "```
+#work
+```"));
+        assert!(!hit("#wor", "t", "#work"));
+    }
+
+    #[test]
+    fn has_filters_use_the_notes_summary() {
+        assert!(hit("has:tags", "t", "#a") && !hit("has:tags", "t", "none"));
+        assert!(hit("has:tasks", "t", "- [x] a") && !hit("has:tasks", "t", "a"));
+        assert!(hit("has:open-tasks", "t", "- [ ] a") && !hit("has:open-tasks", "t", "- [x] a"));
+        assert!(hit("has:due", "t", "- [ ] a @due 2030-01-01") && !hit("has:due", "t", "- [x] a @due 2030-01-01"));
+        assert!(hit("has:links", "t", "see [[x]]") && hit("has:links", "t", "[a](b)") && !hit("has:links", "t", "plain"));
+        assert!(hit("has:code", "t", "use `x`") && !hit("has:code", "t", "plain"));
+        assert!(hit("notebook:work", "t", "") && !hit("notebook:home", "t", ""));
     }
 }

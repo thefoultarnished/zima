@@ -1,7 +1,5 @@
 //! Global quick capture: Ctrl+Alt+N from any app opens a small box to jot a note or an @remind.
 
-use std::cell::RefCell;
-use std::rc::Weak;
 use std::time::Duration;
 
 use chrono::Local;
@@ -10,14 +8,9 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use slint::{ComponentHandle, Timer};
 use slint::winit_030::WinitWindowAccessor;
 
-use super::{App, show_notification, with_app};
+use super::{App, run_on_app, show_notification, with_app};
 use crate::model::{Note, now_ms};
 use crate::{CaptureWindow, Theme, reminders};
-
-thread_local! {
-    /// The app, for Ctrl+Alt+N presses arriving through the event loop (`App` can't cross threads).
-    static CAPTURE_APP: RefCell<Weak<RefCell<App>>> = RefCell::new(Weak::new());
-}
 
 impl App {
     /// Register Ctrl+Alt+N. The manager must stay alive, so the app keeps it.
@@ -38,14 +31,9 @@ impl App {
 
         // Windows tells the hotkey library on this thread; hand the press to the event loop
         // instead of checking for it on a timer, so an idle Zima can sleep.
-        CAPTURE_APP.with(|cell| *cell.borrow_mut() = self.this.clone());
         GlobalHotKeyEvent::set_event_handler(Some(|event: GlobalHotKeyEvent| {
             if event.state == HotKeyState::Pressed {
-                let _ = slint::invoke_from_event_loop(|| {
-                    if let Some(app) = CAPTURE_APP.with(|cell| cell.borrow().upgrade()) {
-                        with_app(&app, |a| a.show_capture());
-                    }
-                });
+                run_on_app(App::show_capture);
             }
         }));
     }
@@ -75,9 +63,7 @@ impl App {
             self.capture = Some(window);
         }
         let Some(window) = &self.capture else { return };
-        if let Some(ui) = self.ui.upgrade() {
-            super::custom_theme::copy_theme(&ui.global::<Theme>(), &window.global::<Theme>());
-        }
+        self.theme_look(&window.global::<Theme>());
         let _ = window.show();
         window.invoke_reset();
         // Centre near the top of the screen once the window has its real size, and take focus.

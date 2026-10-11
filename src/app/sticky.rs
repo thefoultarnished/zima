@@ -53,11 +53,9 @@ impl App {
         window.on_open_in_app(move || {
             if let Some(app) = app.upgrade() {
                 with_app(&app, move |a| {
+                    // Open the note first: a window built just now then loads it once.
                     a.open(id);
-                    if let Some(ui) = a.ui.upgrade() {
-                        let _ = ui.show();
-                        ui.window().set_minimized(false);
-                    }
+                    a.show_window_or_log(false);
                 });
             }
         });
@@ -151,7 +149,6 @@ impl App {
     }
 
     fn sync_theme_to_sticky(&self, window: &StickyWindow) {
-        let Some(ui) = self.ui.upgrade() else { return };
-        super::custom_theme::copy_theme(&ui.global::<Theme>(), &window.global::<Theme>());
+        self.theme_look(&window.global::<Theme>());
     }
 }
