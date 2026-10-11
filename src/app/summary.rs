@@ -18,8 +18,6 @@ pub struct Summary {
     /// Like "3/5"; empty without checkboxes.
     pub progress: String,
     pub tasks: Vec<Task>,
-    /// The whole text in lowercase, so searching doesn't make a new copy of it on every key.
-    pub lower: String,
 }
 
 impl Summary {
@@ -36,7 +34,6 @@ impl Summary {
             tags,
             progress: checklist_progress(body),
             tasks: tasks::extract(body, now),
-            lower: body.to_lowercase(),
         }
     }
 }
@@ -51,6 +48,9 @@ pub struct Summaries {
     /// The day the summaries were made for: "@due fri" means a different date once the day changes.
     day: Option<NaiveDate>,
     notes: HashMap<NoteId, (Stamp, Rc<Summary>)>,
+    /// Each note's text in lowercase, so searching doesn't lowercase every note again on each key.
+    /// Kept only while a search has words: it is as big as all the notes together.
+    lower: HashMap<NoteId, (Stamp, Rc<str>)>,
 }
 
 impl Summaries {
@@ -72,9 +72,28 @@ impl Summaries {
         }
     }
 
+    /// `note`'s text in lowercase, made again only if the note changed since.
+    pub fn lower(&mut self, note: &Note) -> Rc<str> {
+        let stamp = (note.modified, note.body.len());
+        match self.lower.get(&note.id) {
+            Some((kept, lower)) if *kept == stamp => lower.clone(),
+            _ => {
+                let lower: Rc<str> = note.body.to_lowercase().into();
+                self.lower.insert(note.id, (stamp, lower.clone()));
+                lower
+            }
+        }
+    }
+
+    /// Frees the lowercase copies once the search has no words.
+    pub fn drop_lower(&mut self) {
+        self.lower = HashMap::new();
+    }
+
     /// Forget notes that are gone (deleted for good, or removed by another device).
     pub fn retain(&mut self, keep: impl Fn(NoteId) -> bool) {
         self.notes.retain(|&id, _| keep(id));
+        self.lower.retain(|&id, _| keep(id));
     }
 }
 
@@ -103,9 +122,37 @@ mod tests {
     }
 
     #[test]
-    fn summary_keeps_lowercase_text() {
-        assert_eq!(Summary::of("Ärger ÄBC İx", at(7)).lower, "Ärger ÄBC İx".to_lowercase());
-        assert_eq!(Summary::of("", at(7)).lower, "");
+    fn lowercase_text_is_kept_until_the_note_changes() {
+        let mut cache = Summaries::default();
+        let n = note(1, "Ärger ÄBC İx", 100);
+        let first = cache.lower(&n);
+        assert_eq!(&*first, "Ärger ÄBC İx".to_lowercase());
+        assert!(Rc::ptr_eq(&first, &cache.lower(&n)));
+        let edited = cache.lower(&note(1, "Ärger ÄBC İx Y", 200));
+        assert_eq!(&*edited, "Ärger ÄBC İx Y".to_lowercase());
+        assert_eq!(&*cache.lower(&note(2, "", 100)), "");
+    }
+
+    #[test]
+    fn lowercase_text_is_freed_after_search() {
+        let mut cache = Summaries::default();
+        let n = note(1, "Hello", 100);
+        cache.get(&n, at(7));
+        let first = cache.lower(&n);
+        cache.drop_lower();
+        assert!(cache.lower.is_empty());
+        // The summary itself is kept; only the lowercase copies go.
+        assert_eq!(cache.notes.len(), 1);
+        assert!(!Rc::ptr_eq(&first, &cache.lower(&n)));
+    }
+
+    #[test]
+    fn lowercase_text_of_gone_notes_is_forgotten() {
+        let mut cache = Summaries::default();
+        cache.lower(&note(1, "a", 100));
+        cache.lower(&note(2, "b", 100));
+        cache.retain(|id| id == 2);
+        assert_eq!(cache.lower.len(), 1);
     }
 
     #[test]

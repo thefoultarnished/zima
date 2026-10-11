@@ -38,7 +38,7 @@ use crate::markdown::{self, Kind};
 use crate::model::{Note, NoteId, Reminder, UiState, now_ms};
 use crate::store::Store;
 use crate::{AppWindow, ColourDot, MdBlock, NoteRow, ReminderRow, Suggestion, Theme};
-use crate::{commands, format, import, live, reminders, system, window};
+use crate::{commands, format, import, live, reminders, system, undo, window};
 use navigate::{PaletteEntry, PaletteMode};
 
 /// How long to wait after the last keystroke before writing to disk.
@@ -113,8 +113,7 @@ pub struct App {
     /// Watches theme.json, only while the Custom theme is on.
     theme_watch: Timer,
     /// Undo/redo for edits made from Rust (formatting, commands), which the text field can't undo itself.
-    undo: Vec<Snapshot>,
-    redo: Vec<Snapshot>,
+    undo: undo::History,
     /// Undo/redo for Live mode, which needs its own list because Rust rebuilds the blocks around the text.
     live_history: live::History,
     palette_mode: PaletteMode,
@@ -201,14 +200,6 @@ struct FocusTimer {
     is_break: bool,
 }
 
-struct Snapshot {
-    note: NoteId,
-    before: String,
-    after: String,
-    /// Cursor to restore when undoing.
-    cursor: usize,
-}
-
 impl App {
     /// Load the notes and start everything that runs without a window (reminders, backups, sync,
     /// sticky notes, the capture hotkey). `show_window` builds the window.
@@ -252,8 +243,7 @@ impl App {
             timer: None,
             timer_tick: Timer::default(),
             theme_watch: Timer::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo: undo::History::default(),
             palette_mode: PaletteMode::All,
             palette_entries: Vec::new(),
             link_preview: Vec::new(),
@@ -571,13 +561,9 @@ impl App {
         let before = std::mem::replace(&mut note.body, body);
         note.modified = now_ms();
         let id = note.id;
-        if record && !live_step {
-            let after = note.body.clone();
-            self.undo.push(Snapshot { note: id, before: before.clone(), after, cursor: cursor_before });
-            if self.undo.len() > 100 {
-                self.undo.remove(0);
-            }
-            self.redo.clear();
+        // Through `self.notes`, so the note and the undo list can be borrowed together.
+        if let Some(note) = self.notes.iter().find(|n| n.id == id).filter(|_| record && !live_step) {
+            self.undo.record(id, &before, &note.body, cursor_before);
         }
         let edit = live_step.then(|| live::diff(&before, self.current().map_or("", |n| n.body.as_str())));
         self.dirty.insert(id);
@@ -598,14 +584,9 @@ impl App {
             self.live_undo();
             return true;
         }
-        let (Some(note), Some(top)) = (self.current(), self.undo.last()) else { return false };
-        if top.note != note.id || top.after != note.body {
-            return false;
-        }
-        let snapshot = self.undo.pop().unwrap();
-        let cursor = snapshot.cursor.min(snapshot.before.len());
-        self.set_body_from_rust(snapshot.before.clone(), Some((cursor, cursor)), false);
-        self.redo.push(snapshot);
+        let Some(note) = self.state.current.and_then(|id| self.notes.iter().find(|n| n.id == id)) else { return false };
+        let Some((body, cursor)) = self.undo.undo(note.id, &note.body) else { return false };
+        self.set_body_from_rust(body, Some((cursor, cursor)), false);
         true
     }
 
@@ -615,14 +596,10 @@ impl App {
             self.live_redo();
             return true;
         }
-        let (Some(note), Some(top)) = (self.current(), self.redo.last()) else { return false };
-        if top.note != note.id || top.before != note.body {
-            return false;
-        }
-        let snapshot = self.redo.pop().unwrap();
-        let end = snapshot.after.len();
-        self.set_body_from_rust(snapshot.after.clone(), Some((end.min(snapshot.cursor + 1), end.min(snapshot.cursor + 1))), false);
-        self.undo.push(snapshot);
+        let Some(note) = self.state.current.and_then(|id| self.notes.iter().find(|n| n.id == id)) else { return false };
+        let Some((body, cursor)) = self.undo.redo(note.id, &note.body) else { return false };
+        let at = body.len().min(cursor + 1);
+        self.set_body_from_rust(body, Some((at, at)), false);
         true
     }
 
@@ -1212,7 +1189,7 @@ impl App {
         if self.live.is_some() {
             self.live_snap_at(self.cursor, self.cursor, false);
         }
-        // Code colours depend on light/dark.
+        // Highlight and keyword colours depend on the theme.
         self.refresh_preview();
     }
 
@@ -1462,7 +1439,8 @@ impl App {
         self.live = None;
         self.live_history.clear();
         self.undo.clear();
-        self.redo.clear();
+        // A search kept for when the window comes back makes its lowercase copies again then.
+        self.summaries.borrow_mut().drop_lower();
         self.find_query.clear();
         self.find_matches.clear();
         self.find_index = 0;
@@ -1720,7 +1698,6 @@ impl App {
         self.cursor = self.current().map_or(0, |n| saved_cursor(&n.body, self.state.cursors.get(&n.id).copied()));
         self.dismissed_at = None;
         self.undo.clear();
-        self.redo.clear();
         self.live_history.clear();
         self.after_body_change();
         self.refresh_backlinks();
@@ -1811,8 +1788,19 @@ impl App {
         let search = crate::search::parse(&self.search, Local::now().date_naive());
         let query = search.text();
         // Each note is checked once, then every section (and the fading) reuses the answer.
-        let matching: Option<HashSet<NoteId>> = (!search.is_empty())
-            .then(|| self.notes.iter().filter(|n| search.matches(n, &self.summary(n))).map(|n| n.id).collect());
+        let matching: Option<HashSet<NoteId>> = (!search.is_empty()).then(|| {
+            self.notes
+                .iter()
+                .filter(|n| {
+                    let lower = if search.words.is_empty() { None } else { Some(self.summaries.borrow_mut().lower(n)) };
+                    search.matches(n, &self.summary(n), lower.as_deref().unwrap_or(""))
+                })
+                .map(|n| n.id)
+                .collect()
+        });
+        if search.words.is_empty() {
+            self.summaries.borrow_mut().drop_lower();
+        }
         let matches = |n: &Note| matching.as_ref().is_none_or(|m| m.contains(&n.id));
         // The matching line, when the match is in the body rather than the title.
         let first_word = search.words.first().cloned().unwrap_or_default();
@@ -2009,8 +1997,8 @@ fn md_block(block: markdown::Block, ink: &Ink) -> MdBlock {
             .unwrap_or_else(|_| StyledText::from_plain_text(&markdown::plain_marks(text)))
     };
     let cells: Vec<StyledText> = if block.kind == Kind::Code {
-        // Code blocks: one highlighted line per cell.
-        crate::highlight::highlight(&block.text, &block.marker, dark).iter().map(|l| styled(l)).collect()
+        // Code blocks: one plain line per cell, in one colour.
+        markdown::code_lines(&block.text).iter().map(|l| StyledText::from_plain_text(l)).collect()
     } else {
         block
             .cells

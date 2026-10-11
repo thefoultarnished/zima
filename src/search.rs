@@ -34,11 +34,11 @@ impl Query {
         self.words.join(" ")
     }
 
-    /// Whether `note` fits. `summary` is the note's saved summary, so its text isn't lowercased or
-    /// scanned again for tags and tasks.
-    pub fn matches(&self, note: &Note, summary: &Summary) -> bool {
+    /// Whether `note` fits. `summary` is the note's saved summary, so it isn't scanned again for tags
+    /// and tasks. `lower` is the note's text in lowercase, only read when the query has words.
+    pub fn matches(&self, note: &Note, summary: &Summary, lower: &str) -> bool {
         let title = note.title.to_lowercase();
-        if !self.words.iter().all(|w| title.contains(w.as_str()) || summary.lower.contains(w.as_str())) {
+        if !self.words.iter().all(|w| title.contains(w.as_str()) || lower.contains(w.as_str())) {
             return false;
         }
         if let Some(tag) = &self.tag {
@@ -64,9 +64,9 @@ impl Query {
             "tasks" => !summary.tasks.is_empty(),
             "open-tasks" => summary.tasks.iter().any(|t| !t.done),
             "due" => summary.tasks.iter().any(|t| t.due.is_some() && !t.done),
-            "links" => summary.lower.contains("[[") || summary.lower.contains("]("),
+            "links" => note.body.contains("[[") || note.body.contains("]("),
             "tags" => !summary.tags.is_empty(),
-            "code" => summary.lower.contains('`'),
+            "code" => note.body.contains('`'),
             _ => true,
         }) && self.is.iter().all(|i| match i.as_str() {
             "pinned" => note.pinned,
@@ -175,7 +175,7 @@ mod tests {
     fn matches_notes() {
         let note = Note { title: "Atlas".into(), body: "- [ ] ship #work".into(), pinned: true, ..Default::default() };
         let today = Local::now().date_naive();
-        let hit = |q: &str, note: &Note| parse(q, today).matches(note, &Summary::of(&note.body, Local::now()));
+        let hit = |q: &str, note: &Note| parse(q, today).matches(note, &Summary::of(&note.body, Local::now()), &note.body.to_lowercase());
         assert!(hit("atlas has:open-tasks is:pinned #work", &note));
         assert!(!hit("atlas is:favorite", &note));
         assert!(!hit("nothing", &note));
@@ -183,7 +183,7 @@ mod tests {
 
     fn hit(q: &str, title: &str, body: &str) -> bool {
         let note = Note { title: title.into(), body: body.into(), notebook: Some("Work".into()), ..Default::default() };
-        parse(q, Local::now().date_naive()).matches(&note, &Summary::of(body, Local::now()))
+        parse(q, Local::now().date_naive()).matches(&note, &Summary::of(body, Local::now()), &body.to_lowercase())
     }
 
     #[test]

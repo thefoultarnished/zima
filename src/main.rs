@@ -9,7 +9,6 @@ mod commands;
 mod currency;
 mod emoji;
 mod format;
-mod highlight;
 mod history;
 mod import;
 mod instance;
@@ -25,6 +24,7 @@ mod system;
 mod tasks;
 mod timezones;
 mod transfer;
+mod undo;
 mod window;
 
 use std::path::PathBuf;

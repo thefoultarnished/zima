@@ -23,7 +23,7 @@ This is a rewrite of an older Zima built with Tauri and React. It has also been 
 
 ## What it does
 
-**Writing.** Edit, split, preview or live mode (`Ctrl+E` cycles between them; live mode draws the note like the preview, but the block you are in opens as plain Markdown you can type into), a Markdown preview with code highlighting, tables, checklists and a formatting bar if you like buttons (with text colours: `==red:text==`). Zen mode hides everything but the text, with typewriter scrolling and a spotlight that fades the lines you're not working on.
+**Writing.** Edit, split, preview or live mode (`Ctrl+E` cycles between them; live mode draws the note like the preview, but the block you are in opens as plain Markdown you can type into), a Markdown preview with code blocks, tables, checklists and a formatting bar if you like buttons (with text colours: `==red:text==`). Zen mode hides everything but the text, with typewriter scrolling and a spotlight that fades the lines you're not working on.
 
 **Finding things.** `Ctrl+K` opens a quick switcher that searches notes and runs any command. The sidebar keeps your open notes, pinned notes, favourites, recent notes, notebooks, tags and saved searches in one column, and the Bin sits at the bottom. There's also a daily note (`Ctrl+D`), a random note, "on this day", and a Tasks view (`Ctrl+T`) that collects every checkbox from every note. To add a task with a deadline, type a line like `@due rent tomorrow` and press Enter: it goes straight into Tasks.
 

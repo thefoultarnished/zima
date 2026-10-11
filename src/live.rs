@@ -220,7 +220,7 @@ fn push_raw(body: &str, r: Range<usize>, out: &mut Vec<Row>) {
 }
 
 /// Replaces `expect` at `at` with `with`, but only if `expect` is really there.
-fn replace_checked(body: &str, at: usize, expect: &str, with: &str) -> Option<String> {
+pub fn replace_checked(body: &str, at: usize, expect: &str, with: &str) -> Option<String> {
     let end = at.checked_add(expect.len())?;
     if body.get(at..end)? != expect {
         return None;
@@ -266,9 +266,9 @@ fn offset_at_column(body: &str, line: usize, col: usize) -> usize {
 /// Longest gap between two typed keys that still merge into one undo step.
 const MERGE_MS: i64 = 1000;
 /// Most undo steps kept.
-const MAX_STEPS: usize = 500;
+pub const MAX_STEPS: usize = 500;
 /// Most text (removed plus inserted bytes) kept across undo steps.
-const MAX_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// One undoable change, with the cursor position before and after it.
 #[derive(Debug, Clone, PartialEq)]

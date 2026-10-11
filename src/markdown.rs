@@ -3,7 +3,7 @@
 //! Block structure (headings, lists, tables, …) is handled here; inline formatting (bold, italic, code,
 //! links, underline) is re-emitted as Markdown for Slint's `StyledText` to render.
 
-use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{BlockQuoteKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
@@ -228,8 +228,6 @@ pub fn parse(source: &str) -> Vec<Block> {
     let mut callout_first = false;
     // Inside a footnote definition: its label.
     let mut footnote: Option<String> = None;
-    // Language of the code block being read.
-    let mut code_lang = String::new();
 
     // Emit the pending inline text as the right kind of block.
     let flush = |blocks: &mut Vec<Block>,
@@ -273,11 +271,7 @@ pub fn parse(source: &str) -> Vec<Block> {
                     }
                 }
                 Tag::FootnoteDefinition(label) => footnote = Some(label.to_string()),
-                Tag::CodeBlock(kind) => {
-                    code_lang = match &kind {
-                        CodeBlockKind::Fenced(info) => info.split_whitespace().next().unwrap_or("").to_string(),
-                        CodeBlockKind::Indented => String::new(),
-                    };
+                Tag::CodeBlock(_) => {
                     block_line = line_of(range.start);
                     in_code = true;
                     code.clear();
@@ -354,9 +348,7 @@ pub fn parse(source: &str) -> Vec<Block> {
                 }
                 TagEnd::CodeBlock => {
                     in_code = false;
-                    let mut block = Block::new(Kind::Code, code.trim_end_matches('\n').to_string(), block_line);
-                    block.marker = std::mem::take(&mut code_lang);
-                    blocks.push(block);
+                    blocks.push(Block::new(Kind::Code, code.trim_end_matches('\n').to_string(), block_line));
                 }
                 TagEnd::List(_) => {
                     lists.pop();
@@ -570,6 +562,13 @@ pub fn plain_snippet(body: &str, skip: &str, max_lines: usize, max_chars: usize)
     cut
 }
 
+/// A code block's lines, shown exactly as typed in one colour. Empty lines (and an empty block)
+/// hold a no-break space so they keep their height.
+pub fn code_lines(code: &str) -> Vec<String> {
+    let lines: Vec<String> = code.lines().map(|line| if line.is_empty() { "\u{00a0}".to_string() } else { line.to_string() }).collect();
+    if lines.is_empty() { vec!["\u{00a0}".to_string()] } else { lines }
+}
+
 /// Escape characters that would otherwise be read as Markdown when re-parsed.
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -639,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn callouts_footnotes_and_code_language() {
+    fn callouts_footnotes_and_code() {
         let blocks = parse("> [!tip]\n> Drink water.\n\nSee this[^1].\n\n[^1]: The source.\n\n```rust\nfn x() {}\n```");
         let summary: Vec<_> = blocks.iter().map(|b| (b.kind, b.marker.as_str(), b.text.as_str())).collect();
         assert_eq!(
@@ -648,9 +647,20 @@ mod tests {
                 (Kind::Callout, "Tip", "Drink water."),
                 (Kind::Paragraph, "", "See this\\[1\\]."),
                 (Kind::Footnote, "1", "The source."),
-                (Kind::Code, "rust", "fn x() {}"),
+                // The fence's language isn't kept: code shows in one colour.
+                (Kind::Code, "", "fn x() {}"),
             ]
         );
+    }
+
+    #[test]
+    fn code_lines_are_shown_as_typed() {
+        // Markdown marks, keywords and indentation inside code stay exactly as typed.
+        assert_eq!(code_lines("a *b* _c_ ==d== @due fri\n    <x> # y"), vec!["a *b* _c_ ==d== @due fri", "    <x> # y"]);
+        // Empty lines keep their height; Windows line endings don't leave a stray `\r`.
+        assert_eq!(code_lines("a\r\n\r\nb"), vec!["a", "\u{00a0}", "b"]);
+        // An empty block still shows one line.
+        assert_eq!(code_lines(""), vec!["\u{00a0}"]);
     }
 
     #[test]
