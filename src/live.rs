@@ -748,7 +748,7 @@ mod tests {
     fn splice_rejects_bad_ranges() {
         assert_eq!(splice("é", 1..2, "x"), None);
         assert_eq!(splice("abc", 0..10, "x"), None);
-        assert_eq!(splice("abc", 2..1, "x"), None);
+        assert_eq!(splice("abc", Range { start: 2, end: 1 }, "x"), None);
         assert_eq!(splice("abc", 1..2, "X"), Some("aXc".into()));
     }
 
@@ -871,7 +871,7 @@ mod tests {
         assert_eq!(apply_typed("abc", 1..9, "x", 1), None);
         assert_eq!(apply_typed("é", 0..1, "x", 1), None);
         // A backwards range is refused.
-        assert_eq!(apply_typed("abc", 2..1, "x", 1), None);
+        assert_eq!(apply_typed("abc", Range { start: 2, end: 1 }, "x", 1), None);
     }
 
     #[test]
